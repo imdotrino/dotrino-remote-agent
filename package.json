@@ -1,0 +1,39 @@
+{
+  "name": "@dotrino/remote-agent",
+  "version": "0.1.0",
+  "description": "Middleware compartido del ecosistema Dotrino para apps de agente remoto cifrado punto a punto (handshake E2E, emparejamiento SAS con vault, revocación, descubrimiento). Lo consumen dotrino-terminal (PTY) y dotrino-ia (chat con IA).",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./agent": "./src/agent.js",
+    "./client": "./src/client.js",
+    "./link": "./src/link.js",
+    "./discover": "./src/discover.js"
+  },
+  "files": [
+    "index.js",
+    "e2e.js",
+    "protocol.js",
+    "node-globals.js",
+    "src"
+  ],
+  "scripts": {
+    "test": "node -e \"import('@dotrino/remote-agent').then(()=>console.log('ok'))\""
+  },
+  "dependencies": {
+    "@dotrino/identity": "0.17.0",
+    "@dotrino/proxy-client": "0.6.4",
+    "ws": "8.21.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/imdotrino/dotrino-remote-agent.git"
+  },
+  "homepage": "https://github.com/imdotrino/dotrino-remote-agent",
+  "keywords": ["dotrino", "remote", "agent", "e2e", "vault", "proxy", "p2p"]
+}
