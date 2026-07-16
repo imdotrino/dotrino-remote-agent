@@ -22,7 +22,7 @@
     "test": "node -e \"import('@dotrino/remote-agent').then(()=>console.log('ok'))\""
   },
   "dependencies": {
-    "@dotrino/identity": "0.17.0",
+    "@dotrino/identity": "0.21.0",
     "@dotrino/proxy-client": "0.6.4",
     "ws": "8.21.0"
   },
@@ -35,5 +35,13 @@
     "url": "git+ssh://git@github.com/imdotrino/dotrino-remote-agent.git"
   },
   "homepage": "https://github.com/imdotrino/dotrino-remote-agent",
-  "keywords": ["dotrino", "remote", "agent", "e2e", "vault", "proxy", "p2p"]
+  "keywords": [
+    "dotrino",
+    "remote",
+    "agent",
+    "e2e",
+    "vault",
+    "proxy",
+    "p2p"
+  ]
 }
