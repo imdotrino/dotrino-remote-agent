@@ -47,9 +47,29 @@ function saveLink (dir, link) {
 }
 
 export function parseQr (text) {
-  const qr = JSON.parse(String(text).trim())
+  const qr = normalizeQr(text)
   if (!qr?.iss || !qr?.proxy || !qr?.token || !qr?.sn) throw new Error('QR inválido (v2): faltan iss/proxy/token/sn')
   return qr
+}
+
+// Acepta el código de emparejamiento en 3 formas: JSON crudo, base64url del JSON, o
+// URL "profile.dotrino.com/#vault=<base64url>". El base64url es el formato canónico
+// del ecosistema (no expone la estructura en texto plano).
+export function b64urlDecode (s) {
+  const b64 = String(s).replace(/-/g, '+').replace(/_/g, '/')
+  return Buffer.from(b64, 'base64').toString('utf8')
+}
+
+function normalizeQr (text) {
+  let s = String(text ?? '').trim()
+  const i = s.indexOf('#vault=')
+  if (i >= 0) s = s.slice(i + 7).trim()        // profile.dotrino.com/#vault=…
+  if (!s.startsWith('{')) {                     // no es JSON → probar base64url
+    const json = b64urlDecode(s)
+    if (json && json.trim().startsWith('{')) s = json
+    else throw new Error('código de emparejamiento inválido (se espera JSON o base64url)')
+  }
+  return JSON.parse(s)
 }
 
 async function freshClient (proxyUrl, dir) {
