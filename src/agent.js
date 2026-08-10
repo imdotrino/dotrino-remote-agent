@@ -21,11 +21,11 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
+import { verifyChain, signWithDevice, verifyDeviceSig, verifyDelegation, pubkeyId } from '@dotrino/identity/capabilities'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
-import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
-import { loadLink, dataDir } from './link.js'
+import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS, RENEW_BEFORE_MS } from '../protocol.js'
+import { loadLink, saveLink, dataDir } from './link.js'
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
 class AgentSession {
@@ -73,6 +73,7 @@ class AgentSession {
  * @param {()=>void} [opts.onRevoked] se llamó al auto-borrarse por revocación.
  * @param {()=>void} [opts.onReady]   agente listo y escuchando.
  * @param {boolean} [opts.quiet]      sin logs.
+ * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
  */
 export async function startRemoteAgent (opts = {}) {
   const dir = opts.dir || dataDir()
@@ -86,13 +87,18 @@ export async function startRemoteAgent (opts = {}) {
 
   installNodeGlobals(dir)
 
-  const { getWebSocketProxyClient } = await import('@dotrino/proxy-client')
   const proxyUrl = opts.proxyUrl || process.env.PROXY_URL || link.proxy || 'wss://proxy.dotrino.com'
-  const client = getWebSocketProxyClient({
-    url: proxyUrl, enableWebRTC: false, autoReconnect: true,
-    maxReconnectAttempts: 100000, reconnectDelay: 4000
-  })
-  await client.connect()
+  // `client` inyectado: solo para las pruebas (transporte de mentira). En producción se
+  // levanta el del ecosistema — no hay otro transporte.
+  const client = opts.client || await (async () => {
+    const { getWebSocketProxyClient } = await import('@dotrino/proxy-client')
+    const c = getWebSocketProxyClient({
+      url: proxyUrl, enableWebRTC: false, autoReconnect: true,
+      maxReconnectAttempts: 100000, reconnectDelay: 4000
+    })
+    await c.connect()
+    return c
+  })()
 
   // Identificarse bajo la pubkey de ESTA máquina (firmado con su D).
   const identify = async () => {
@@ -113,27 +119,74 @@ export async function startRemoteAgent (opts = {}) {
 
   const send = (to, obj) => { try { client.send(to, obj) } catch (e) { if (!opts.quiet) console.error('[remote-agent] send:', e.message) } }
 
+  /**
+   * Petición firmada a la bóveda por el proxy, dirigida a su pubkey maestra. Es el
+   * mismo sobre para todo (`data` firmado con la D + el cert de esta máquina): lo
+   * comparten el refresco de revocaciones y la renovación del cert.
+   */
+  async function vaultRpc (sendType, okType, data, timeoutMs = 15000) {
+    const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
+    return new Promise((resolve, reject) => {
+      const off = client.on('message', (_f, p) => {
+        if (p?.type === okType) { off(); resolve(p) }
+        else if (p?.type === VMSG.ERROR) { off(); reject(new Error(p.error)) }
+      })
+      setTimeout(() => { off(); reject(new Error('timeout')) }, timeoutMs)
+      client.sendByPubkey(master, { type: sendType, data, signature, cert: link.cert })
+    })
+  }
+
   // --- Revocación: refrescar la lista del vault por el proxy (best-effort) ---
   let revokedSet = new Set()
   async function refreshRevocations () {
     try {
-      const data = { op: 'devices', publickey: myPub, ts: Date.now() }
-      const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
-      const res = await new Promise((resolve, reject) => {
-        const off = client.on('message', (_f, p) => {
-          if (p?.type === VMSG.DEVICES_RESULT) { off(); resolve(p) }
-          else if (p?.type === 'vault.error') { off(); reject(new Error(p.error)) }
-        })
-        setTimeout(() => { off(); reject(new Error('timeout')) }, 15000)
-        client.sendByPubkey(master, { type: VMSG.DEVICES, data, signature, cert: link.cert })
-      })
+      const res = await vaultRpc(VMSG.DEVICES, VMSG.DEVICES_RESULT, { op: 'devices', publickey: myPub, ts: Date.now() })
       revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
     } catch (e) {
-      if (!opts.quiet) console.error('[remote-agent] no pude refrescar revocaciones (uso la cache):', e.message)
+      if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
     }
   }
-  refreshRevocations()
-  const revTimer = setInterval(refreshRevocations, REVOKE_REFRESH_MS); revTimer.unref?.()
+
+  /**
+   * RENOVACIÓN del cert (`vault.renew`). Sin esto, el cert vence a los 30 días y hay
+   * que re-emparejar a mano una máquina que nunca dejó de ser tuya. Se pide cuando le
+   * quedan menos de `RENEW_BEFORE_MS`, en el mismo tic que el refresco de revocados:
+   * el agente ya está hablando con la bóveda ahí, y si está caída o el proxy no va, el
+   * siguiente tic reintenta — con días de margen antes de que el cert muera.
+   *
+   * El cert nuevo se VERIFICA antes de guardarlo (misma maestra, misma sub-clave y más
+   * vida que el que tenemos): una respuesta cualquiera del proxy no puede sustituirle
+   * la credencial al agente.
+   */
+  async function renewCertIfNeeded () {
+    const exp = link.cert?.exp
+    if (typeof exp !== 'number' || exp - Date.now() > RENEW_BEFORE_MS) return
+    try {
+      const res = await vaultRpc(VMSG.RENEW, VMSG.RENEWED, { op: 'renew', publickey: myPub, ts: Date.now() })
+      const cert = res?.cert
+      if (!cert || cert.sub !== myPub || cert.iss !== master || !(cert.exp > exp)) {
+        throw new Error('the vault returned a cert that is not for this machine')
+      }
+      const v = await verifyDelegation({ cert, expectedSub: myPub, expectedScope: SIGN_SCOPE })
+      if (!v.ok) throw new Error(v.reason)
+      link.cert = cert
+      saveLink(dir, link)
+      audit('cert-renew', { exp: cert.exp })
+      if (!opts.quiet) console.log(`[remote-agent] cert renewed until ${new Date(cert.exp).toISOString().slice(0, 10)}`)
+    } catch (e) {
+      // No es fatal: el cert viejo sigue sirviendo hasta que venza y el próximo tic
+      // reintenta. Se avisa igual, porque si esto falla durante días la máquina se cae
+      // sola y hay que re-emparejarla.
+      if (!opts.quiet) {
+        const days = Math.max(0, Math.round((exp - Date.now()) / 86400000))
+        console.error(`[remote-agent] could not renew the cert (${days} day(s) left):`, e.message)
+      }
+    }
+  }
+
+  const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
+  vaultTick()
+  const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
 
   // sid -> AgentSession
   const sessions = new Map()

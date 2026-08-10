@@ -12,6 +12,13 @@ Provee lo común — y **solo** eso:
 - **Handshake anti-MITM** con `verifyChain` + anti-replay (firmado por el vault).
 - **Emparejamiento SAS** del agente contra el vault (código que no viaja).
 - **Revocación** con auto-borrado del enlace al ser revocada la máquina.
+- **Renovación automática del cert** (`vault.renew`): el cert dura 30 días y el agente
+  pide uno fresco cuando le quedan menos de 7, en el mismo tic que el refresco de
+  revocados. Sin esto, una máquina que nunca dejó de ser tuya se caía sola al mes y
+  había que re-emparejarla a mano. El cert nuevo se verifica antes de guardarlo (misma
+  maestra, misma sub-clave, más vida); si la bóveda está apagada, el siguiente tic
+  reintenta, con días de margen. Un cert **ya vencido** no se renueva: ahí sí toca
+  re-emparejar.
 - **Wiring de proxy + identity** (`identify` firmado, transporte por `proxy.dotrino.com`).
 - **Autodescubrimiento** de agentes por label (`listVaultDevices` + filtro).
 - **Auditoría** (`sessions.log` JSONL).
