@@ -127,11 +127,16 @@ export async function startRemoteAgent (opts = {}) {
   async function vaultRpc (sendType, okType, data, timeoutMs = 15000) {
     const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
     return new Promise((resolve, reject) => {
+      // El temporizador se LIMPIA al contestar (y no retiene el bucle de eventos):
+      // sin eso, cada consulta al vault dejaba 15 s de espera pendiente y un proceso
+      // corto que solo quería preguntar algo se quedaba colgado hasta que vencía.
+      const done = (fn, v) => { off(); clearTimeout(timer); fn(v) }
       const off = client.on('message', (_f, p) => {
-        if (p?.type === okType) { off(); resolve(p) }
-        else if (p?.type === VMSG.ERROR) { off(); reject(new Error(p.error)) }
+        if (p?.type === okType) done(resolve, p)
+        else if (p?.type === VMSG.ERROR) done(reject, new Error(p.error))
       })
-      setTimeout(() => { off(); reject(new Error('timeout')) }, timeoutMs)
+      const timer = setTimeout(() => done(reject, new Error('timeout')), timeoutMs)
+      timer.unref?.()
       client.sendByPubkey(master, { type: sendType, data, signature, cert: link.cert })
     })
   }
