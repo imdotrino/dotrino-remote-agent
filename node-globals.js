@@ -34,7 +34,24 @@ let _installed = false
 export function installNodeGlobals (dir) {
   if (_installed) return
   if (typeof globalThis.WebSocket === 'undefined') globalThis.WebSocket = WebSocket
-  // Node ≥22 expone un `localStorage` no funcional sin flag → forzamos el shim.
-  globalThis.localStorage = fileLocalStorage(path.join(dir, 'transport.json'))
+
+  // Node ≥22 expone un `localStorage` NO funcional sin `--localstorage-file`, así
+  // que aquí se pone el shim de archivo igual. Pero se pone con `defineProperty` y
+  // NO asignando:
+  //
+  //   · lo que Node define es un ACCESOR (getter/setter nativos), y asignarle
+  //     revienta con «Cannot assign to read only property 'localStorage'» — medido
+  //     en Node 25.9. Con la asignación, cualquier agente headless dejaba de
+  //     arrancar su plano de control en un Node moderno, y el mensaje no decía nada
+  //     de esto;
+  //   · el descriptor tampoco se LEE (nada de `globalThis.localStorage`): tocar el
+  //     getter nativo sin el flag emite un warning por consola.
+  //
+  // Es lo mismo que hace `@dotrino/vault`, que ya se topó con esto.
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: fileLocalStorage(path.join(dir, 'transport.json'))
+  })
   _installed = true
 }
