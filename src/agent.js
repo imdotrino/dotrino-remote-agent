@@ -74,6 +74,13 @@ class AgentSession {
  * @param {()=>void} [opts.onReady]   agente listo y escuchando.
  * @param {boolean} [opts.quiet]      sin logs.
  * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
+ *
+ * Devuelve además el **`client`** (el `WebSocketProxyClient` ya conectado e
+ * identificado bajo la pubkey de esta máquina). Se expone a propósito: un agente
+ * que necesite algo más del transporte —anunciarse en un canal, por ejemplo— debe
+ * reusar ESTA conexión y no abrir otra. Dos conexiones del mismo aparato al proxy
+ * son dos identidades de transporte, dos `identify` y dos colas: exactamente el
+ * lío que este middleware existe para evitar.
  */
 export async function startRemoteAgent (opts = {}) {
   const dir = opts.dir || dataDir()
@@ -279,7 +286,7 @@ export async function startRemoteAgent (opts = {}) {
   }
   if (opts.onReady) { try { opts.onReady({ machine: myPub, machineId: myId, master }) } catch (_) {} }
 
-  return { machine: myPub, machineId: myId, master, close: stop }
+  return { machine: myPub, machineId: myId, master, client, close: stop }
 }
 
 export default { startRemoteAgent }

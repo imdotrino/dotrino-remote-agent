@@ -62,6 +62,10 @@ const ra = await startRemoteAgent({
   onRevoked () { console.log('me revocaron') }
 })
 // ra.machine, ra.machineId, ra.master, ra.close()
+// ra.client → el WebSocketProxyClient ya conectado e identificado bajo esta
+//   máquina. Si tu agente necesita algo más del transporte (anunciarse en un
+//   canal, por ejemplo), REUSA este: abrir una segunda conexión sería un segundo
+//   `identify`, una segunda identidad de transporte y una segunda cola.
 ```
 
 Enrolar la máquina (una vez, con el QR del vault):
