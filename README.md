@@ -33,7 +33,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent` | isomórfico | `e2e` (`makeEphemeral`/`deriveKey`/`seal`/`open`) + constantes de protocolo |
 | `@dotrino/remote-agent/agent` | Node | `startRemoteAgent(opts)` |
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
-| `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `dataDir`, `parseQr` |
+| `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink` |
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel` |
 
 ## Uso
@@ -68,14 +68,40 @@ const ra = await startRemoteAgent({
 //   `identify`, una segunda identidad de transporte y una segunda cola.
 ```
 
-Enrolar la máquina (una vez, con el QR del vault):
+Enrolar la máquina (una vez, con la invitación del vault — URL del QR, código compacto
+o JSON, da igual: la entiende `enrollWithVault` de `@dotrino/vault`, que es el único
+enrolamiento headless del ecosistema y el que esto reusa):
 
 ```js
 import { enroll } from '@dotrino/remote-agent/link'
 const link = await enroll({
   qr, label: 'ia-agent',
-  onChallenge: ({ deviceId, code }) => console.log(`Tipeá en el vault: ${code}`)
+  onChallenge: ({ deviceId, code }) => console.log(`Escribe en el vault: dotrino-vault approve ${code}`)
 })
+// link = { device, enc, cert, iss, proxy, label, ns?, at } — `enc` es la llave de
+// CIFRADO: con ella la bóveda puede sellarle secretos a este agente.
+```
+
+**Lo que puede hacer el agente lo dice la invitación, no este paquete**: no hay tipos
+de agente, hay permisos (`dotrino-vault pair --scope sign,read,store,secrets:<ns>`). Un
+bot que publica en las apps y lee solo su cajón de secretos se empareja con
+`pair --service <ns> --scope sign`, y se enrola con `enroll({ qr, ns: '<ns>' })` (el `ns`
+hace que se exija ese permiso en el cert y queda en el enlace). Sus secretos los pide
+con `fetchSecrets`/`waitForSecrets` de `@dotrino/vault/service` pasando la identidad por
+parámetros (`{ ns, proxyUrl: link.proxy, masterPubkey: link.iss, device, cert, enc }`).
+
+### Un agente como CLIENTE de otro agente (Node)
+
+Un agente Node también puede hablar con otro agente —un bot que guarda en el node de
+contenido, por ejemplo— con el mismo código que usa una app: `clientLink(link)` arma el
+`{ id, cert, iss, proxy }` que esperan `RemoteAgentClient` y `ContentClient`, con un `id`
+que firma con la llave del aparato (`identityFromLink`).
+
+```js
+import { loadLink, clientLink } from '@dotrino/remote-agent/link'
+import { ContentClient } from '@dotrino/content-client'
+const cc = await ContentClient.connect({ link: clientLink(loadLink()) })
+const ref = await cc.put(bytes, { encrypt: false, acl: 'public', mime: 'application/json' })
 ```
 
 ### Cliente (navegador, la PWA)
@@ -116,6 +142,7 @@ extraerlo luego a este paquete.
 - `@dotrino/identity` (capabilities: `verifyChain`, `signWithDevice`, `verifyDeviceSig`,
   `pubkeyId`, `makeDeviceKey`, `verifyDelegation`, `makePairingCode`)
 - `@dotrino/proxy-client` (`WebSocketProxyClient`)
+- `@dotrino/vault` (`enrollWithVault`: el enrolamiento headless del ecosistema; `parseInvite`)
 - `ws` (shim de `WebSocket` en Node, lado agente)
 
 ## Licencia
