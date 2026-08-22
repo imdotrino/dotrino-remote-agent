@@ -10,7 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { makeDeviceKey, verifyDeviceSig } from '@dotrino/identity/capabilities'
-import { identityFromLink, clientLink, saveLink, loadLink } from '../src/link.js'
+import { identityFromLink, clientLink, saveLink, loadLink, renewLink } from '../src/link.js'
 
 test('identityFromLink firma con la llave del aparato y expone lo que piden los clientes', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'ra-link-'))
@@ -37,4 +37,12 @@ test('identityFromLink firma con la llave del aparato y expone lo que piden los 
 
 test('identityFromLink rechaza un enlace sin llave/cert/iss', () => {
   assert.throws(() => identityFromLink({}), /invalid link/)
+})
+
+test('renewLink: no toca un cert que no vence pronto, y no intenta con uno ya vencido', async () => {
+  const device = await makeDeviceKey({ label: 'bot' })
+  const far = { device, cert: { exp: Date.now() + 20 * 86400000 }, iss: 'x', proxy: 'wss://p' }
+  assert.deepEqual(await renewLink(far, { dir: '/nonexistent' }), { renewed: false, exp: far.cert.exp, reason: 'not due' })
+  const dead = { device, cert: { exp: Date.now() - 1 }, iss: 'x', proxy: 'wss://p' }
+  assert.equal((await renewLink(dead, { dir: '/nonexistent' })).reason, 'expired: enroll again')
 })

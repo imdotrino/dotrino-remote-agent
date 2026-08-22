@@ -33,7 +33,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent` | isomórfico | `e2e` (`makeEphemeral`/`deriveKey`/`seal`/`open`) + constantes de protocolo |
 | `@dotrino/remote-agent/agent` | Node | `startRemoteAgent(opts)` |
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
-| `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink` |
+| `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel` |
 
 ## Uso
@@ -89,6 +89,9 @@ bot que publica en las apps y lee solo su cajón de secretos se empareja con
 hace que se exija ese permiso en el cert y queda en el enlace). Sus secretos los pide
 con `fetchSecrets`/`waitForSecrets` de `@dotrino/vault/service` pasando la identidad por
 parámetros (`{ ns, proxyUrl: link.proxy, masterPubkey: link.iss, device, cert, enc }`).
+
+Un agente que corre UNA vez (un bot por cron) no tiene el tic de renovación de
+`startRemoteAgent`: que llame a `renewLink(link)` en cada corrida, o su cert muere a los 30 días.
 
 ### Un agente como CLIENTE de otro agente (Node)
 

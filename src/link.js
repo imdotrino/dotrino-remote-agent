@@ -16,8 +16,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
-import { requestDevices } from '@dotrino/identity/vault/remote.js'
+import { signWithDevice, pubkeyId, verifyDelegation } from '@dotrino/identity/capabilities'
+import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
 
 export function dataDir (name = 'dotrino-remote-agent') {
@@ -127,9 +127,47 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
   }
 }
 
+/** Con menos de esto de vida se pide cert nuevo (7 días; el cert dura 30). */
+export const RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * RENUEVA el cert del enlace si vence pronto y lo persiste. Es lo que hace el agente
+ * de larga duración en cada tic (`startRemoteAgent`), sacado aquí para los agentes que
+ * corren UNA vez (un bot por cron): sin esto su cert muere a los 30 días y hay que
+ * re-emparejar una máquina que nunca dejó de ser tuya.
+ *
+ * El cert nuevo se VERIFICA antes de guardarlo (misma maestra, misma llave, más vida).
+ * Un cert ya vencido no se renueva: ahí toca re-emparejar. No lanza: devuelve qué pasó.
+ *
+ * @param {object} link   el enlace (se muta con el cert nuevo).
+ * @param {{ dir?: string, force?: boolean }} [opts]
+ * @returns {Promise<{ renewed: boolean, exp: number|null, reason?: string }>}
+ */
+export async function renewLink (link, { dir = dataDir(), force = false } = {}) {
+  const exp = link?.cert?.exp
+  if (typeof exp !== 'number') return { renewed: false, exp: null, reason: 'no cert' }
+  if (exp <= Date.now()) return { renewed: false, exp, reason: 'expired: enroll again' }
+  if (!force && exp - Date.now() > RENEW_BEFORE_MS) return { renewed: false, exp, reason: 'not due' }
+  installNodeGlobals(dir)
+  try {
+    const res = await requestRenew({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
+    const cert = res?.cert
+    if (!cert || cert.sub !== link.device.publickey || cert.iss !== link.iss || !(cert.exp > exp)) {
+      throw new Error('the vault returned a cert that is not for this machine')
+    }
+    const v = await verifyDelegation({ cert, expectedSub: link.device.publickey })
+    if (!v.ok) throw new Error(v.reason)
+    link.cert = cert
+    saveLink(dir, link)
+    return { renewed: true, exp: cert.exp }
+  } catch (e) {
+    return { renewed: false, exp, reason: e.message }
+  }
+}
+
 /** El enlace como lo esperan `ContentClient.connect({ link })` y `RemoteAgentClient`. */
 export function clientLink (link, opts) {
   return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com' }
 }
 
-export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink }
+export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink, renewLink }
