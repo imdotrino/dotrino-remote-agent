@@ -122,7 +122,13 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
       return { paired: true, master: link.iss, proxy, exp: link.cert.exp, deviceId: await pubkeyId(device.publickey) }
     },
     async listVaultDevices () {
-      return requestDevices({ master: link.iss, proxy, device, cert: link.cert, sinceSeq: 0 })
+      // SIN `sinceSeq`: un agente no guarda el acta ni la encadena —no hay una sola línea
+      // aquí que lea `chain`—, así que pedir el historial es traerse cientos de KB para
+      // tirarlos. Y pedirlo con 0 era lo peor de todo: quien no tiene acta previa adopta la
+      // actual de un salto («sin-acta-previa»), de modo que la cadena no iba a usarse jamás.
+      // Costó tenerlo así: la respuesta llegó a 1,03 MB, el proxio corta el frame a 1 MB y
+      // la bóveda se quedaba muda para todo el ecosistema (2026-08-24).
+      return requestDevices({ master: link.iss, proxy, device, cert: link.cert })
     }
   }
 }
