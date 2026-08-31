@@ -8,6 +8,7 @@
  *   '@dotrino/remote-agent/client'   → RemoteAgentClient (navegador, lado PWA)
  *   '@dotrino/remote-agent/link'     → enroll() emparejamiento SAS (Node)
  *   '@dotrino/remote-agent/discover' → listAgentsByLabel() (navegador)
+ *   '@dotrino/remote-agent/node-globals' → installNodeGlobals() (Node)
  *
  * El paquete NO sabe nada de PTY ni de IA: provee canal cifrado por sesión,
  * despacho de payloads de dominio, emparejamiento con vault y revocación.
