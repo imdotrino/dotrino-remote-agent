@@ -22,9 +22,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { verifyChain, signWithDevice, verifyDeviceSig, verifyDelegation, pubkeyId } from '@dotrino/identity/capabilities'
+import { sealersOf } from '@dotrino/identity/acta'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
-import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS, RENEW_BEFORE_MS } from '../protocol.js'
+import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
 import { loadLink, saveLink, dataDir } from './link.js'
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
@@ -154,47 +155,75 @@ export async function startRemoteAgent (opts = {}) {
     try {
       const res = await vaultRpc(VMSG.DEVICES, VMSG.DEVICES_RESULT, { op: 'devices', publickey: myPub, ts: Date.now() })
       revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
+      // El acta viaja con la lista. Apuntar su `seq` es lo que dispara la renovación en el
+      // mismo tic si el dueño nos cambió los permisos.
+      anotarActa(res.acta)
     } catch (e) {
       if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
     }
   }
 
   /**
-   * RENOVACIÓN del cert (`vault.renew`). Sin esto, el cert vence a los 30 días y hay
-   * que re-emparejar a mano una máquina que nunca dejó de ser tuya. Se pide cuando le
-   * quedan menos de `RENEW_BEFORE_MS`, en el mismo tic que el refresco de revocados:
-   * el agente ya está hablando con la bóveda ahí, y si está caída o el proxy no va, el
-   * siguiente tic reintenta — con días de margen antes de que el cert muera.
+   * RENOVACIÓN del cert (`vault.renew`). YA NO ES UNA TAREA DE CALENDARIO: el papel no
+   * vence, lleva el `seq` del acta con el que se emitió. Se pide uno nuevo cuando el ACTA
+   * dice algo distinto de lo que lleva escrito — o sea, cuando el dueño cambió permisos.
    *
-   * El cert nuevo se VERIFICA antes de guardarlo (misma maestra, misma sub-clave y más
-   * vida que el que tenemos): una respuesta cualquiera del proxy no puede sustituirle
-   * la credencial al agente.
+   * Antes se pedía al acercarse la caducidad, y eso obligaba a que la bóveda pudiera firmar
+   * sola cada mes; era el último motivo por el que la maestra tenía que estar disponible sin
+   * nadie delante. Ahora renovar ocurre justo cuando ya hay una selladora abierta, porque
+   * cambiar el acta ES tenerla abierta.
+   *
+   * El cert nuevo se VERIFICA antes de guardarlo, contra el ACTA que viene con él: quien lo
+   * firmó tiene que ser selladora de ESTE perfil. Ya no se compara con una llave fija, para
+   * que una segunda bóveda pueda emitir; lo que se fija es el perfil.
    */
   async function renewCertIfNeeded () {
-    const exp = link.cert?.exp
-    if (typeof exp !== 'number' || exp - Date.now() > RENEW_BEFORE_MS) return
+    // ¿Nos quedamos atrás? Lo sabemos por el acta que la bóveda manda con cada respuesta.
+    const visto = link.actaSeq
+    if (typeof visto !== 'number' || typeof link.cert?.seq !== 'number' || visto <= link.cert.seq) return
     try {
       const res = await vaultRpc(VMSG.RENEW, VMSG.RENEWED, { op: 'renew', publickey: myPub, ts: Date.now() })
       const cert = res?.cert
-      if (!cert || cert.sub !== myPub || cert.iss !== master || !(cert.exp > exp)) {
-        throw new Error('the vault returned a cert that is not for this machine')
-      }
-      const v = await verifyDelegation({ cert, expectedSub: myPub, expectedScope: SIGN_SCOPE })
+      const acta = res?.acta
+      if (!cert || cert.sub !== myPub) throw new Error('the vault returned a cert that is not for this machine')
+      if (!acta) throw new Error('the vault did not send its record: cannot check who signed this cert')
+      if (acta.profileId !== master) throw new Error('the record is from a profile other than the pinned one')
+      const v = await verifyDelegation({
+        cert, expectedSub: myPub, expectedScope: SIGN_SCOPE,
+        actaSeq: acta.seq, sealers: sealersOf(acta)
+      })
       if (!v.ok) throw new Error(v.reason)
       link.cert = cert
+      link.actaSeq = acta.seq
       saveLink(dir, link)
-      audit('cert-renew', { exp: cert.exp })
-      if (!opts.quiet) console.log(`[remote-agent] cert renewed until ${new Date(cert.exp).toISOString().slice(0, 10)}`)
+      audit('cert-renew', { seq: cert.seq })
+      if (!opts.quiet) console.log(`[remote-agent] cert renewed against record #${cert.seq}`)
     } catch (e) {
-      // No es fatal: el cert viejo sigue sirviendo hasta que venza y el próximo tic
-      // reintenta. Se avisa igual, porque si esto falla durante días la máquina se cae
-      // sola y hay que re-emparejarla.
-      if (!opts.quiet) {
-        const days = Math.max(0, Math.round((exp - Date.now()) / 86400000))
-        console.error(`[remote-agent] could not renew the cert (${days} day(s) left):`, e.message)
-      }
+      // No es fatal: el papel de antes sigue sirviendo para todo lo que el acta le siga
+      // permitiendo, y el próximo tic reintenta. Se avisa igual: si esto falla, lo que el
+      // dueño acaba de conceder no llega.
+      if (!opts.quiet) console.error('[remote-agent] could not renew the cert:', e.message)
     }
   }
+
+  /**
+   * Guarda el acta que manda la bóveda. Hace dos cosas, y las dos hacen falta:
+   *   · dispara la renovación cuando su `seq` pasa al del papel que tenemos;
+   *   · es CON LO QUE SE JUZGA a quien nos habla — quien firma tiene que ser selladora de
+   *     este perfil, y eso solo lo dice el acta. Por eso se PERSISTE: si viviera en memoria,
+   *     al reiniciar el agente no podría atender a nadie hasta el primer tic.
+   */
+  function anotarActa (acta) {
+    if (typeof acta?.seq !== 'number' || link.acta?.seq === acta.seq) return
+    link.acta = acta
+    link.actaSeq = acta.seq
+    try { saveLink(dir, link) } catch (_) {}
+  }
+
+  /** El acta con la que se juzga un papel. Sin ella no se atiende a nadie. */
+  const contextoActa = () => (link.acta
+    ? { actaSeq: link.acta.seq, sealers: sealersOf(link.acta) }
+    : { actaSeq: null, sealers: null })
 
   const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
   vaultTick()
@@ -217,7 +246,10 @@ export async function startRemoteAgent (opts = {}) {
     if (typeof data.ts !== 'number' || Math.abs(Date.now() - data.ts) > 5 * 60 * 1000) {
       return send(from, { type: ERROR, error: 'handshake vencido (posible replay, o el reloj del dispositivo está desfasado)' })
     }
-    const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, trustedIssuer: master, revoked: revokedSet })
+    // Manda el acta, no una llave fija: con varias selladoras el papel de un peer puede
+    // venir firmado por otra bóveda del mismo perfil. Sin acta no se atiende — no hay con
+    // qué decidir, así que no se decide que sí.
+    const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...contextoActa(), revoked: revokedSet })
     if (!chk.ok) return send(from, { type: ERROR, error: 'no autorizado: ' + chk.reason })
     if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'handshake inválido' })
 
