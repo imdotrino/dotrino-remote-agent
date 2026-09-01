@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { signWithDevice, pubkeyId, verifyDelegation } from '@dotrino/identity/capabilities'
+import { sealersOf } from '@dotrino/identity/acta'
 import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
 
@@ -150,24 +151,39 @@ export const RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000
  * @returns {Promise<{ renewed: boolean, exp: number|null, reason?: string }>}
  */
 export async function renewLink (link, { dir = dataDir(), force = false } = {}) {
-  const exp = link?.cert?.exp
-  if (typeof exp !== 'number') return { renewed: false, exp: null, reason: 'no cert' }
-  if (exp <= Date.now()) return { renewed: false, exp, reason: 'expired: enroll again' }
-  if (!force && exp - Date.now() > RENEW_BEFORE_MS) return { renewed: false, exp, reason: 'not due' }
+  if (!link?.cert) return { renewed: false, seq: null, reason: 'no cert' }
+  // EL PAPEL DEL MODELO VIEJO SE CAMBIA SÍ O SÍ. Lleva `exp` y no `seq`; se acepta por el
+  // repliegue de migración pero muere en su fecha, y con él la máquina. Los demás se
+  // renuevan cuando el acta va por delante — nunca por calendario, que el papel no vence.
+  const legado = typeof link.cert.seq !== 'number'
+  if (legado && typeof link.cert.exp === 'number' && link.cert.exp <= Date.now()) {
+    return { renewed: false, reason: 'expired: enroll again' }
+  }
+  const atrasado = typeof link.actaSeq === 'number' && typeof link.cert.seq === 'number' && link.actaSeq > link.cert.seq
+  if (!force && !legado && !atrasado) return { renewed: false, seq: link.cert.seq, reason: 'not due' }
   installNodeGlobals(dir)
   try {
     const res = await requestRenew({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
     const cert = res?.cert
-    if (!cert || cert.sub !== link.device.publickey || cert.iss !== link.iss || !(cert.exp > exp)) {
-      throw new Error('the vault returned a cert that is not for this machine')
-    }
-    const v = await verifyDelegation({ cert, expectedSub: link.device.publickey })
+    const acta = res?.acta
+    if (!cert || cert.sub !== link.device.publickey) throw new Error('the vault returned a cert that is not for this machine')
+    // El acta viaja con el papel y hace falta para juzgarlo: quien lo firmó tiene que ser
+    // SELLADORA de este perfil. Ya no se compara `cert.iss` con una llave fija — con varias
+    // bóvedas el emisor puede ser otra del mismo perfil; lo que se fija es el PERFIL.
+    if (!acta) throw new Error('the vault did not send its record: cannot check who signed this cert')
+    if (acta.profileId !== link.iss) throw new Error('the record is from a profile other than the pinned one')
+    const v = await verifyDelegation({ cert, expectedSub: link.device.publickey, actaSeq: acta.seq, sealers: sealersOf(acta) })
     if (!v.ok) throw new Error(v.reason)
+    // SE GUARDA ANTES DE DAR NADA POR BUENO. Emitir un papel RETIRA el anterior, así que si
+    // esto no se persiste la máquina se queda usando uno revocado y fuera para siempre. Le
+    // pasó al registro de selladores en la migración, y por eso está dicho aquí.
     link.cert = cert
+    link.acta = acta
+    link.actaSeq = acta.seq
     saveLink(dir, link)
-    return { renewed: true, exp: cert.exp }
+    return { renewed: true, seq: cert.seq }
   } catch (e) {
-    return { renewed: false, exp, reason: e.message }
+    return { renewed: false, seq: link.cert.seq ?? null, reason: e.message }
   }
 }
 

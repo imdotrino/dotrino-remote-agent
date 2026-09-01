@@ -39,10 +39,31 @@ test('identityFromLink rechaza un enlace sin llave/cert/iss', () => {
   assert.throws(() => identityFromLink({}), /invalid link/)
 })
 
-test('renewLink: no toca un cert que no vence pronto, y no intenta con uno ya vencido', async () => {
+/**
+ * CUÁNDO SE PIDE PAPEL NUEVO, ahora que el papel no vence por reloj.
+ *
+ * Dos motivos y ninguno es el calendario: que el nuestro sea del MODELO VIEJO (lleva `exp`
+ * y no `seq`: se acepta por el repliegue de migración pero muere en su fecha), o que el
+ * acta que hemos visto vaya por delante del papel (el dueño cambió permisos).
+ */
+test('renewLink: se renueva un papel del modelo viejo y uno atrasado; no uno al día', async () => {
   const device = await makeDeviceKey({ label: 'bot' })
-  const far = { device, cert: { exp: Date.now() + 20 * 86400000 }, iss: 'x', proxy: 'wss://p' }
-  assert.deepEqual(await renewLink(far, { dir: '/nonexistent' }), { renewed: false, exp: far.cert.exp, reason: 'not due' })
-  const dead = { device, cert: { exp: Date.now() - 1 }, iss: 'x', proxy: 'wss://p' }
-  assert.equal((await renewLink(dead, { dir: '/nonexistent' })).reason, 'expired: enroll again')
+
+  // Al día: mismo `seq` que el acta que hemos visto. No hay nada que pedir.
+  const alDia = { device, cert: { seq: 9 }, actaSeq: 9, iss: 'x', proxy: 'wss://p' }
+  assert.deepEqual(await renewLink(alDia, { dir: '/nonexistent' }), { renewed: false, seq: 9, reason: 'not due' })
+
+  // Del modelo viejo: se intenta (falla por la red, que es lo que se puede comprobar aquí),
+  // y lo que importa es que NO conteste «not due» — eso era lo que dejaba la migración a
+  // medias para siempre.
+  const viejo = { device, cert: { exp: Date.now() + 20 * 86400000 }, iss: 'x', proxy: 'wss://p' }
+  assert.notEqual((await renewLink(viejo, { dir: '/nonexistent' })).reason, 'not due')
+
+  // Ya vencido: ahí no hay renovación que valga, toca re-emparejar.
+  const muerto = { device, cert: { exp: Date.now() - 1 }, iss: 'x', proxy: 'wss://p' }
+  assert.equal((await renewLink(muerto, { dir: '/nonexistent' })).reason, 'expired: enroll again')
+
+  // Atrasado respecto del acta: también se intenta.
+  const atras = { device, cert: { seq: 3 }, actaSeq: 8, iss: 'x', proxy: 'wss://p' }
+  assert.notEqual((await renewLink(atras, { dir: '/nonexistent' })).reason, 'not due')
 })
