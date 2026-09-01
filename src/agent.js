@@ -22,7 +22,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { verifyChain, signWithDevice, verifyDeviceSig, verifyDelegation, pubkeyId } from '@dotrino/identity/capabilities'
-import { sealersOf } from '@dotrino/identity/acta'
+import { sealersOf, memberCanSign } from '@dotrino/identity/acta'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
@@ -251,6 +251,14 @@ export async function startRemoteAgent (opts = {}) {
     // qué decidir, así que no se decide que sí.
     const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...contextoActa(), revoked: revokedSet })
     if (!chk.ok) return send(from, { type: ERROR, error: 'no autorizado: ' + chk.reason })
+    // CERT ∩ ACTA. `verifyChain` comprueba QUIÉN EMITIÓ el papel; que el APARATO siga siendo
+    // miembro y pueda firmar lo dice el acta, y hay que preguntárselo aparte. Sin esto, un
+    // papel bien firmado por una selladora abría sesión aunque el acta no nombrara a ese
+    // aparato — o ya no lo nombrara. Bajo el modelo viejo daba igual, porque el papel ERA la
+    // autoridad y caducaba; con el papel atado al acta, el acta tiene que decidir.
+    if (!memberCanSign(link.acta, chk.device)) {
+      return send(from, { type: ERROR, error: 'no autorizado: acta — ese aparato no firma por este perfil' })
+    }
     if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'handshake inválido' })
 
     const eph = await makeEphemeral()
