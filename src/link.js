@@ -120,7 +120,13 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
     },
     async getVaultCert () { return { cert: link.cert } },
     async vaultStatus () {
-      return { paired: true, master: link.iss, proxy, exp: link.cert.exp, deviceId: await pubkeyId(device.publickey) }
+      // `seq` es lo que describe un papel ahora; `exp` solo lo llevan los del modelo viejo
+      // y se sigue dando mientras existan, para que quien mire sepa que le falta migrar.
+      return {
+        paired: true, master: link.iss, proxy, deviceId: await pubkeyId(device.publickey),
+        seq: link.cert?.seq ?? null,
+        ...(typeof link.cert?.exp === 'number' ? { exp: link.cert.exp, legacy: true } : {})
+      }
     },
     async listVaultDevices () {
       // SIN `sinceSeq`: un agente no guarda el acta ni la encadena —no hay una sola línea
