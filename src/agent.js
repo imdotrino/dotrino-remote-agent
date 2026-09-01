@@ -178,9 +178,16 @@ export async function startRemoteAgent (opts = {}) {
    * que una segunda bóveda pueda emitir; lo que se fija es el perfil.
    */
   async function renewCertIfNeeded () {
-    // ¿Nos quedamos atrás? Lo sabemos por el acta que la bóveda manda con cada respuesta.
+    // DOS MOTIVOS PARA PEDIR PAPEL NUEVO:
+    //   · el nuestro es del MODELO VIEJO (lleva `exp` y no `seq`). Ese hay que cambiarlo sí
+    //     o sí: se acepta por el repliegue de migración, pero muere en su fecha y con él la
+    //     máquina. Sin esta rama la migración no terminaba nunca — el disparador comparaba
+    //     `seq` y un papel viejo no tiene, así que nunca saltaba.
+    //   · o el acta que hemos visto va por delante del papel: el dueño cambió permisos.
+    const legado = typeof link.cert?.seq !== 'number'
     const visto = link.actaSeq
-    if (typeof visto !== 'number' || typeof link.cert?.seq !== 'number' || visto <= link.cert.seq) return
+    const atrasado = typeof visto === 'number' && typeof link.cert?.seq === 'number' && visto > link.cert.seq
+    if (!legado && !atrasado) return
     try {
       const res = await vaultRpc(VMSG.RENEW, VMSG.RENEWED, { op: 'renew', publickey: myPub, ts: Date.now() })
       const cert = res?.cert
