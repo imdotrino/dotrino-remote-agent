@@ -45,7 +45,7 @@
     "p2p"
   ],
   "peerDependencies": {
-    "@dotrino/identity": ">=0.73.0",
+    "@dotrino/identity": ">=0.73.1",
     "@dotrino/proxy-client": ">=0.10.1",
     "@dotrino/vault": ">=0.30.0"
   },
