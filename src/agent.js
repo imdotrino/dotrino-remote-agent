@@ -22,7 +22,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { verifyChain, signWithDevice, verifyDeviceSig, verifyDelegation, pubkeyId } from '@dotrino/identity/capabilities'
-import { sealersOf, memberCanSign } from '@dotrino/identity/acta'
+import { sealersOf, memberCan } from '@dotrino/identity/acta'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
@@ -263,8 +263,18 @@ export async function startRemoteAgent (opts = {}) {
     // papel bien firmado por una selladora abría sesión aunque el acta no nombrara a ese
     // aparato — o ya no lo nombrara. Bajo el modelo viejo daba igual, porque el papel ERA la
     // autoridad y caducaba; con el papel atado al acta, el acta tiene que decidir.
-    if (!memberCanSign(link.acta, chk.device)) {
-      return send(from, { type: ERROR, error: 'no autorizado: acta — ese aparato no firma por este perfil' })
+    //
+    // SE PREGUNTA POR EL PERMISO, NO POR «FIRMA POR LA PERSONA». Aquí se usaba
+    // `memberCanSign`, que a un miembro CON `cn` le dice que no salvo que se le nombre su
+    // cajón — y con razón: un servicio habla por la bóveda, no por su dueño. Pero eso es la
+    // pregunta de OTRO mostrador. Lo que pasa aquí es un saludo, y lo que prueba es «soy
+    // este aparato», no «hablo por ti»: exigirle lo segundo dejaba a TODO servicio sin poder
+    // abrir sesión con otro agente. El bot social se pasó así el 1 de septiembre, con un
+    // node de contenido encendido a su lado que le contestaba «ese aparato no firma por este
+    // perfil». Se le pide lo que corresponde: que el acta lo nombre y le reconozca `sign`.
+    const miembro = (link.acta?.members || []).some((m) => m?.pub === chk.device)
+    if (!miembro || !memberCan(link.acta, chk.device, 'sign')) {
+      return send(from, { type: ERROR, error: 'no autorizado: acta — este perfil no reconoce a ese aparato' })
     }
     if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'handshake inválido' })
 
