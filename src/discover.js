@@ -24,7 +24,7 @@
 /**
  * @param {object} id   instancia de Identity (del vault) ya conectada.
  * @param {string} [label]  filtrar por servicio/label exacto (p. ej. `'content'`,
- *   `'ia-agent'`). Omitir = todos los que tengan nombre y no sean `'cli'` (un navegador
+ *   `'ia-agent'`). Omitir = todos los que tengan nameOf y no sean `'cli'` (un navegador
  *   enrolado queda como `cli` y no atiende a nadie).
  * @returns {Promise<Array<{sub:string,label:string,cn:string|null}>>} uno por miembro.
  */
@@ -37,10 +37,10 @@ export async function listAgentsByLabel (id, label) {
   if (!acta) return []
 
   const mine = id.me?.publickey
-  const nombre = (m) => m.cn || m.label || null
+  const nameOf = (m) => m.cn || m.label || null
   return (acta.members || [])
     .filter((m) => m?.pub && m.pub !== mine)
-    .filter((m) => (label ? nombre(m) === label : (nombre(m) && nombre(m) !== 'cli')))
+    .filter((m) => (label ? nameOf(m) === label : (nameOf(m) && nameOf(m) !== 'cli')))
     .map((m) => ({ sub: m.pub, label: m.label || m.cn || '', cn: m.cn || null }))
 }
 

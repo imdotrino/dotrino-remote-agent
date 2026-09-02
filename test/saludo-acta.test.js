@@ -15,36 +15,36 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { memberCan } from '@dotrino/identity/acta'
 
-const SERVICIO = '{"kty":"EC","x":"bot"}'
-const APARATO = '{"kty":"EC","x":"telefono"}'
-const MIRON = '{"kty":"EC","x":"echado"}'
-const SIN_FIRMA = '{"kty":"EC","x":"solo-lee"}'
+const SERVICE = '{"kty":"EC","x":"bot"}'
+const DEVICE = '{"kty":"EC","x":"telefono"}'
+const EVICTED = '{"kty":"EC","x":"echado"}'
+const NO_SIGN = '{"kty":"EC","x":"solo-lee"}'
 
 const acta = {
   seq: 12,
   members: [
-    { pub: SERVICIO, cn: 'eco', caps: ['secrets', 'sign'] },
-    { pub: APARATO, cn: null, caps: ['sign', 'read', 'store'] },
-    { pub: SIN_FIRMA, cn: 'mirador', caps: ['secrets'] }
+    { pub: SERVICE, cn: 'eco', caps: ['secrets', 'sign'] },
+    { pub: DEVICE, cn: null, caps: ['sign', 'read', 'store'] },
+    { pub: NO_SIGN, cn: 'mirador', caps: ['secrets'] }
   ]
 }
 
 /** El guardián, tal cual está en `handleHandshake`. */
-const puedeSaludar = (device) =>
+const canHandshake = (device) =>
   (acta.members || []).some((m) => m?.pub === device) && memberCan(acta, device, 'sign')
 
-test('un SERVICIO puede saludar: está probando que es él, no que habla por ti', () => {
-  assert.equal(puedeSaludar(SERVICIO), true)
+test('un SERVICE puede saludar: está probando que es él, no que habla por ti', () => {
+  assert.equal(canHandshake(SERVICE), true)
 })
 
 test('un aparato tuyo también, como siempre', () => {
-  assert.equal(puedeSaludar(APARATO), true)
+  assert.equal(canHandshake(DEVICE), true)
 })
 
 test('a quien el acta ya no nombra se le sigue cerrando la puerta', () => {
-  assert.equal(puedeSaludar(MIRON), false)
+  assert.equal(canHandshake(EVICTED), false)
 })
 
 test('y a un miembro sin `sign` también: se afloja lo que sobraba, no lo que protegía', () => {
-  assert.equal(puedeSaludar(SIN_FIRMA), false)
+  assert.equal(canHandshake(NO_SIGN), false)
 })
