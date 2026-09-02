@@ -21,6 +21,7 @@
  * `on('message', cb)` recibe los payloads del agente, ya descifrados.
  */
 import { verifyChain } from '@dotrino/identity/capabilities'
+import { sealersOf } from '@dotrino/identity/acta'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { HS, ACK, DATA, PING, PONG, ERROR } from '../protocol.js'
 
@@ -51,6 +52,23 @@ export class RemoteAgentClient {
   }
 
   _emit (ev, ...args) { for (const h of (this._h[ev] || [])) { try { h(...args) } catch (_) {} } }
+
+  /**
+   * El acta con la que se juzga el papel del agente. Se pide UNA vez por cliente y se
+   * guarda: es la política vigente del perfil, no cambia a mitad de una sesión.
+   *
+   * Si no se puede traer, se devuelve `null` a propósito y `verifyChain` corta con
+   * `no-acta`. No hay repliegue: sin acta no hay con qué decidir, y no decidir es que no.
+   */
+  async _acta () {
+    if (this._actaCache !== undefined) return this._actaCache
+    let acta = this.link.acta || null
+    if (!acta) {
+      try { acta = (await this.link.id?.listVaultDevices?.())?.acta || null } catch (_) { acta = null }
+    }
+    this._actaCache = acta
+    return acta
+  }
 
   async _identify () {
     // En modo self NO identificamos esta conexión como P: el proxy enruta por token
@@ -115,7 +133,19 @@ export class RemoteAgentClient {
 
     // El ack debe: (1) encadenar a NUESTRA maestra, (2) estar firmado por el agente
     // que apuntamos, (3) atar nuestra pub efímera y el sid.
-    const chk = await verifyChain({ data: res.ack, signature: res.signature, cert: res.cert, trustedIssuer: this.link.iss })
+    //
+    // CON EL ACTA, o no se juzga. Desde que el papel no vence, `verifyChain` necesita el
+    // `seq` del acta y su lista de SELLADORAS: sin eso no puede decir si quien firmó el
+    // papel del agente podía hacerlo, y contesta `no-acta` — que es lo correcto, porque
+    // decir «vale» sin haber comprobado nada es como entraba un papel viejo. Aquí no se le
+    // pasaba: el lado del agente sí lo hacía (`contextoActa`) y este lado se quedó atrás,
+    // así que TODA sesión moría con «el agente no está certificado por tu vault: no-acta».
+    // `clientLink` no trae el acta, así que se le pide a la bóveda una vez y se guarda.
+    const acta = await this._acta()
+    const chk = await verifyChain({
+      data: res.ack, signature: res.signature, cert: res.cert, trustedIssuer: this.link.iss,
+      actaSeq: acta?.seq ?? null, sealers: acta ? sealersOf(acta) : null
+    })
     if (!chk.ok) throw new Error('el agente no está certificado por tu vault: ' + chk.reason)
     if (res.ack.machine !== this.agentPubkey) throw new Error('el ack vino de otro agente')
     if (res.ack.ceph !== eph.pub || res.ack.sid !== res.sid) throw new Error('ack no corresponde a este handshake')
