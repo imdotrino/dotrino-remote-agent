@@ -111,9 +111,8 @@ export async function startRemoteAgent (opts = {}) {
   // Identificarse bajo la pubkey de ESTA máquina (firmado con su D).
   const identify = async () => {
     if (!client.token) return
-    const data = { op: 'identify', publickey: myPub, token: client.token, ts: Date.now() }
-    const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
-    await client.identify({ data, signature })
+    // El sobre lo arma el pilar (`identifyAs`), que le pone el destinatario.
+    await client.identifyAs({ publickey: myPub, sign: (d) => signWithDevice({ privateJwk: link.device.privateJwk, data: d }) })
   }
   await identify()
   client.on('token', () => { identify().catch(() => {}) })
