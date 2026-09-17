@@ -16,8 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { signWithDevice, pubkeyId, verifyDelegation } from '@dotrino/identity/capabilities'
-import { sealersOf } from '@dotrino/identity/acta'
+import { signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
 import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
 
@@ -169,17 +168,11 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
   if (!force && !legado && !atrasado) return { renewed: false, seq: link.cert.seq, reason: 'not due' }
   installNodeGlobals(dir)
   try {
-    const res = await requestRenew({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
-    const cert = res?.cert
-    const acta = res?.acta
-    if (!cert || cert.sub !== link.device.publickey) throw new Error('the vault returned a cert that is not for this machine')
-    // El acta viaja con el papel y hace falta para juzgarlo: quien lo firmó tiene que ser
-    // SELLADORA de este perfil. Ya no se compara `cert.iss` con una llave fija — con varias
-    // bóvedas el emisor puede ser otra del mismo perfil; lo que se fija es el PERFIL.
-    if (!acta) throw new Error('the vault did not send its record: cannot check who signed this cert')
-    if (acta.profileId !== link.iss) throw new Error('the record is from a profile other than the pinned one')
-    const v = await verifyDelegation({ cert, expectedSub: link.device.publickey, actaSeq: acta.seq, sealers: sealersOf(acta) })
-    if (!v.ok) throw new Error(v.reason)
+    // `requestRenew` ya JUZGA lo que devuelve (`checkVaultReply` del pilar: acta bien
+    // firmada, esta bóveda puede sellarla, el papel lo firmó ella y es para esta llave) y
+    // lanza si no cuadra. Aquí se comparaba `acta.profileId` con `link.iss`, que solo vale
+    // en una cuenta que nació en esa bóveda: con una segunda bóveda no renovaba nunca.
+    const { cert, acta } = await requestRenew({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
     // SE GUARDA ANTES DE DAR NADA POR BUENO. Emitir un papel RETIRA el anterior, así que si
     // esto no se persiste la máquina se queda usando uno revocado y fuera para siempre. Le
     // pasó al registro de selladores en la migración, y por eso está dicho aquí.

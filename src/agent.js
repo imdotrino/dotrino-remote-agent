@@ -21,8 +21,8 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { verifyChain, signWithDevice, verifyDeviceSig, verifyDelegation, pubkeyId } from '@dotrino/identity/capabilities'
-import { sealersOf, memberCan } from '@dotrino/identity/acta'
+import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
+import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
@@ -191,14 +191,10 @@ export async function startRemoteAgent (opts = {}) {
       const res = await vaultRpc(VMSG.RENEW, VMSG.RENEWED, { op: 'renew', publickey: myPub, ts: Date.now() })
       const cert = res?.cert
       const acta = res?.acta
-      if (!cert || cert.sub !== myPub) throw new Error('the vault returned a cert that is not for this machine')
-      if (!acta) throw new Error('the vault did not send its record: cannot check who signed this cert')
-      if (acta.profileId !== master) throw new Error('the record is from a profile other than the pinned one')
-      const v = await verifyDelegation({
-        cert, expectedSub: myPub, expectedScope: SIGN_SCOPE,
-        actaSeq: acta.seq, sealers: sealersOf(acta)
-      })
-      if (!v.ok) throw new Error(v.reason)
+      // La regla del pilar, contra la bóveda a la que se le pidió (`master`). Aquí se exigía
+      // `acta.profileId === master`, que con una segunda bóveda nunca es verdad.
+      const chk = await checkVaultReply({ acta, cert, vault: master, sub: myPub, scope: SIGN_SCOPE })
+      if (!chk.ok) throw new Error('invalid renewed cert: ' + chk.reason)
       link.cert = cert
       link.actaSeq = acta.seq
       saveLink(dir, link)
