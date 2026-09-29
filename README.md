@@ -35,6 +35,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
 | `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
+| `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
 
 ## Uso
 
@@ -92,6 +93,23 @@ parámetros (`{ ns, proxyUrl: link.proxy, masterPubkey: link.iss, device, cert, 
 
 Un agente que corre UNA vez (un bot por cron) no tiene el tic de renovación de
 `startRemoteAgent`: que llame a `renewLink(link)` en cada corrida, o su cert muere a los 30 días.
+
+### Dónde vive el enlace: `~/.dotrino/agent/<tipo>/<nombre>/` (el estándar)
+
+Todo agente guarda su enlace ahí, igual que `dotrino-env` guarda el suyo en
+`~/.dotrino/service/<bóveda>/<cajón>`. El **tipo** es el `label` de `startRemoteAgent`; el
+**nombre** lo elige quien lo lanza (`--name`), y así pueden correr dos del mismo tipo a la
+vez (uno por proyecto), cada uno como un aparato aparte del acta.
+
+```js
+import { resolveInstance, lockInstance } from '@dotrino/remote-agent/instances'
+const { name, dir } = resolveInstance('ia-agent', opt('--name'))  // sin nombre: se busca
+process.on('exit', lockInstance(dir))   // dos procesos con el mismo enlace = la misma llave
+```
+
+Sin nombre: si no hay ninguno enlazado es `default`; si hay uno, ese; si hay varios, se
+para y dice cuáles hay (la misma regla que `dotrino-env`). La raíz común se cambia con
+`DOTRINO_AGENT_HOME`.
 
 ### Un agente como CLIENTE de otro agente (Node)
 
