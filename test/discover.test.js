@@ -65,3 +65,32 @@ test('si la bóveda no contesta, se usa el acta que ya se tiene guardada', async
   }
   assert.deepEqual((await listAgentsByLabel(id, 'content')).map((a) => a.sub), [NODE])
 })
+
+// ---------- probeAgents: qué es cada uno lo dice el agente, no el nombre del acta ----------
+
+import { probeAgents } from '../src/discover.js'
+
+/** Un transporte de mentira: los `sub` de `kinds` contestan el ping con su kind. */
+function fakeClient (kinds) {
+  const handlers = []
+  return {
+    on (ev, cb) { handlers.push(cb); return () => { handlers.splice(handlers.indexOf(cb), 1) } },
+    sendByPubkey (sub, p) {
+      if (p.type !== 'ra.ping' || !(sub in kinds)) return
+      setTimeout(() => { for (const h of [...handlers]) h('tok', { type: 'ra.pong', n: p.n, kind: kinds[sub] }) }, 5)
+    }
+  }
+}
+
+test('probeAgents: encuentra la terminal aunque el dueño la llamara «TerminalLocal»', async () => {
+  const found = await probeAgents(fakeClient({ [NODE]: 'content', [PHONE]: 'terminal-agent' }), [NODE, PHONE, BROWSER], { timeoutMs: 100 })
+  assert.equal(found.get(PHONE)?.kind, 'terminal-agent')
+  assert.equal(found.get(NODE)?.kind, 'content')
+  assert.equal(found.has(BROWSER), false, 'quien no contesta no sale: no se sabe qué es')
+})
+
+test('probeAgents: un agente viejo que contesta sin kind sale con kind null', async () => {
+  const c = fakeClient({ [NODE]: undefined })
+  const found = await probeAgents(c, [NODE], { timeoutMs: 100 })
+  assert.equal(found.get(NODE)?.kind, null)
+})

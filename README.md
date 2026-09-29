@@ -34,7 +34,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent/agent` | Node | `startRemoteAgent(opts)` |
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
 | `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
-| `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel` |
+| `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
 
 ## Uso
 
@@ -122,6 +122,20 @@ chat.send({ type: 'msg', text: 'arreglá el bug en auth.js' })
 
 const online = await chat.ping()  // liveness sin abrir sesión
 ```
+
+**Encontrar los agentes de UN tipo: pregúntaselo a ellos, no al nombre del acta.** El label
+del acta lo pone el dueño al emparejar («TerminalLocal»), así que filtrar por él no encuentra
+nada. El pong de cada agente dice qué es (el `label` con que arrancó `startRemoteAgent`):
+
+```js
+import { listAgentsByLabel, probeAgents } from '@dotrino/remote-agent/discover'
+const miembros = await listAgentsByLabel(id)                    // todos, sin filtrar
+const vivos = await probeAgents(proxyClient, miembros.map((m) => m.sub))
+const terminales = miembros.filter((m) => vivos.get(m.sub)?.kind === 'terminal-agent')
+```
+
+Un agente apagado no contesta y no sale: sin preguntarle no se sabe qué es. El pong con
+`kind` existe desde 0.11.0; uno más viejo contesta con `kind: null`.
 
 ### `link` (la PWA lo obtiene del vault)
 

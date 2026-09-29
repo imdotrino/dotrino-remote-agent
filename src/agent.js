@@ -66,7 +66,8 @@ class AgentSession {
  * Arranca el agente. Devuelve `{ machine, machineId, master, close }`.
  *
  * @param {object} opts
- * @param {string} [opts.label]       label del dispositivo (para logging; el real vive en link.json).
+ * @param {string} [opts.label]       qué agente es (`terminal-agent`, `ia-agent`…): lo contesta el pong
+ *   para que las apps lo encuentren (`probeAgents`). El nombre del acta es del dueño.
  * @param {string} [opts.proxyUrl]    default wss://proxy.dotrino.com.
  * @param {string} [opts.dir]         dir del enlace (default dataDir()).
  * @param {object} [opts.link]        enlace ya cargado (override de dir).
@@ -329,7 +330,9 @@ export async function startRemoteAgent (opts = {}) {
     else if (payload.type === DATA) handleData(from, payload)
     // Sonda de presencia (liveness): el cliente hace ping y respondemos pong con el
     // mismo nonce → así la app sabe que el agente está online (sin abrir sesión).
-    else if (payload.type === PING) send(from, { type: PONG, n: payload.n })
+    // El pong dice además QUÉ agente es (`kind`, el label con que arrancó): el nombre que
+    // tiene en el acta lo pone el dueño al emparejar y no sirve para saber qué atiende.
+    else if (payload.type === PING) send(from, { type: PONG, n: payload.n, kind: opts.label || null })
     else if (payload.type === VMSG.REVOKED) handleRevoked(payload).catch(() => {})
   })
 
