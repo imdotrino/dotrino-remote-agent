@@ -51,8 +51,8 @@
     "@dotrino/vault": ">=0.64.0"
   },
   "devDependencies": {
-    "@dotrino/identity": "0.92.0",
-    "@dotrino/proxy-client": "0.18.2",
-    "@dotrino/vault": "0.64.0"
+    "@dotrino/identity": "0.105.0",
+    "@dotrino/proxy-client": "0.25.0",
+    "@dotrino/vault": "0.75.0"
   }
 }
