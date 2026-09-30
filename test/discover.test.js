@@ -94,3 +94,13 @@ test('probeAgents: un agente viejo que contesta sin kind sale con kind null', as
   const found = await probeAgents(c, [NODE], { timeoutMs: 100 })
   assert.equal(found.get(NODE)?.kind, null)
 })
+
+test('probeAgents: el ping es EFÍMERO — a quien no está no se le encola ni se le timbra', async () => {
+  // El teléfono sonaba cada minuto sin ningún pedido: la app preguntaba a todos los aparatos
+  // de la cuenta, y el proxio encolaba el ping del que no estaba conectado y le timbraba.
+  const opciones = []
+  const c = { on: () => () => {}, sendByPubkey: (_s, _p, o) => { opciones.push(o) } }
+  await probeAgents(c, [NODE, PHONE], { timeoutMs: 10 })
+  assert.equal(opciones.length, 2)
+  assert.ok(opciones.every((o) => o?.ephemeral === true), JSON.stringify(opciones))
+})

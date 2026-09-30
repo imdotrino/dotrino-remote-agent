@@ -73,7 +73,11 @@ export function probeAgents (client, subs, { timeoutMs = 3000 } = {}) {
     for (const sub of subs) {
       const n = [...crypto.getRandomValues(new Uint8Array(8))].map((x) => x.toString(16).padStart(2, '0')).join('')
       bySub.set(n, sub)
-      try { client.sendByPubkey(sub, { type: PING, n }) } catch (_) {}
+      // EFÍMERO: una pregunta de «¿estás ahí?» solo vale en vivo. Sin esto el proxio la
+      // ENCOLABA para quien no estaba conectado y le tocaba el timbre: la app preguntaba a
+      // todos los aparatos de la cuenta y el teléfono sonaba cada minuto sin ningún pedido
+      // detrás (2026-09-30). Quien no contesta ahora, no está; eso es la respuesta.
+      try { client.sendByPubkey(sub, { type: PING, n }, { ephemeral: true }) } catch (_) {}
     }
     setTimeout(() => { try { off() } catch (_) {} resolve(found) }, timeoutMs)
   })

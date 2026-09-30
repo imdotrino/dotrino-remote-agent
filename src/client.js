@@ -169,7 +169,8 @@ export class RemoteAgentClient {
       })
       setTimeout(() => { off(); resolve(false) }, timeoutMs)
     })
-    this.client.sendByPubkey(this.agentPubkey, { type: PING, n })
+    // Efímero, como `probeAgents`: si no está, no se encola ni se le timbra.
+    this.client.sendByPubkey(this.agentPubkey, { type: PING, n }, { ephemeral: true })
     return got
   }
 
