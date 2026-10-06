@@ -41,10 +41,11 @@ export class RemoteAgentClient {
     this.client = null
     this.key = null
     this.sid = null
-    this._h = { message: [], error: [] }
+    this._h = { message: [], error: [], resumed: [] }
+    this._resuming = null
   }
 
-  /** Suscribe a eventos. Devuelve un `off()` para desuscribir. Eventos: message, error. */
+  /** Suscribe a eventos. Devuelve un `off()` para desuscribir. Eventos: message, error, resumed. */
   on (ev, cb) {
     if (!this._h[ev]) this._h[ev] = []
     this._h[ev].push(cb)
@@ -101,10 +102,40 @@ export class RemoteAgentClient {
       if (p.type === DATA && p.sid === this.sid) {
         try { const m = await open(this.key, p.env); this._emit('message', m) } catch {}
       } else if (p.type === ERROR) {
-        this._emit('error', new Error(p.error))
+        this._onAgentError(p)
       }
     })
 
+    await this._handshake()
+    return this
+  }
+
+  /**
+   * Un error del agente. Si es que ya no conoce NUESTRA sesión (se reinició: las sesiones
+   * viven en su memoria), se vuelve a saludar solo y se avisa con `resumed`; lo que la app
+   * tenía abierto allí lo decide la app. Cualquier otro error, o no poder volver a saludar,
+   * sale por `error`. Un `unknown-session` de un `sid` que ya no es el nuestro (llegó tarde,
+   * de antes de volver a saludar) no dice nada nuevo y se ignora.
+   */
+  _onAgentError (p) {
+    if (p.code !== 'unknown-session') { this._emit('error', Object.assign(new Error(p.error), { code: p.code })); return }
+    if (p.sid !== this.sid) return
+    this._resume()
+  }
+
+  /** Vuelve a saludar, una sola vez aunque lleguen varios errores seguidos. */
+  _resume () {
+    if (this._resuming) return this._resuming
+    this.key = null
+    this._resuming = this._handshake()
+      .then(() => { this._emit('resumed', { sid: this.sid }) })
+      .catch((e) => { this._emit('error', e) })
+      .finally(() => { this._resuming = null })
+    return this._resuming
+  }
+
+  /** El saludo: abre una sesión con el agente y deja `sid` y `key`. */
+  async _handshake () {
     const eph = await makeEphemeral()
     // El self-cert P←P del modo self puede vencerse (24 h): refrescarlo si hace falta.
     let cert = this.link.cert
@@ -151,11 +182,12 @@ export class RemoteAgentClient {
 
     this.sid = res.sid
     this.key = await deriveKey(eph.privateKey, res.ack.seph, res.sid)
-    return this
   }
 
-  /** Envía un payload de dominio cifrado al agente. */
+  /** Envía un payload de dominio cifrado al agente (si se está volviendo a saludar, después). */
   async send (payload) {
+    if (this._resuming) await this._resuming
+    if (!this.key) throw Object.assign(new Error('no session with the agent'), { code: 'no-session' })
     const env = await seal(this.key, payload)
     this.client.sendByPubkey(this.agentPubkey, { type: DATA, sid: this.sid, env })
   }

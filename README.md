@@ -141,6 +141,16 @@ chat.send({ type: 'msg', text: 'arreglá el bug en auth.js' })
 const online = await chat.ping()  // liveness sin abrir sesión
 ```
 
+**Si el agente se reinicia, el cliente vuelve a saludar solo** (≥ 0.14.0). Las sesiones viven
+en la memoria del agente: tras reiniciarse contesta `unknown-session` a lo que le llegue con un
+`sid` viejo, el cliente abre otra sesión y avisa con `resumed`. Lo que la app tenía abierto allí
+(una consola, una conversación) puede no existir ya: eso lo decide la app en ese evento. Lo que
+se mande mientras tanto sale con la sesión nueva.
+
+```js
+chat.on('resumed', () => volverAEngancharme())   // p. ej. la terminal: attach, u open si ya no está
+```
+
 **Encontrar los agentes de UN tipo: pregúntaselo a ellos, no al nombre del acta.** El label
 del acta lo pone el dueño al emparejar («TerminalLocal»), así que filtrar por él no encuentra
 nada. El pong de cada agente dice qué es (el `label` con que arrancó `startRemoteAgent`):

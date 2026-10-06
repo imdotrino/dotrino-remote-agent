@@ -317,7 +317,10 @@ export async function startRemoteAgent (opts = {}) {
 
   function handleData (from, p) {
     const s = sessions.get(p.sid)
-    if (!s) return send(from, { type: ERROR, error: 'sesión desconocida o expirada' })
+    // Con `code` y el `sid`: así el cliente sabe que es SU sesión la que se perdió (el agente
+    // se reinició, o venció) y vuelve a saludar solo, en vez de quedarse con un error. Se
+    // comprueba por el código, no por la frase.
+    if (!s) return send(from, { type: ERROR, code: 'unknown-session', sid: p.sid, error: 'sesión desconocida o expirada' })
     s._exp = Date.now() + SESSION_TTL_MS
     s.from = from
     s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'sobre inválido' }))
