@@ -19,6 +19,7 @@ import os from 'node:os'
 import { signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
 import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
+import { adoptRecord } from './record.js'
 
 export function dataDir (name = 'dotrino-remote-agent') {
   if (process.env.DOTRINO_REMOTE_AGENT_DIR) return process.env.DOTRINO_REMOTE_AGENT_DIR
@@ -177,8 +178,13 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
     // esto no se persiste la máquina se queda usando uno revocado y fuera para siempre. Le
     // pasó al registro de selladores en la migración, y por eso está dicho aquí.
     link.cert = cert
-    link.acta = acta
     link.actaSeq = acta.seq
+    // El acta que viaja con el papel se guarda SOLO si se puede comprobar (`record.js`): es
+    // la que decide quién abre sesión con este agente. El papel sí se guarda siempre.
+    if ((await adoptRecord({ link, candidate: acta, me: link.device.publickey })).adopt) {
+      link.acta = acta
+      link.actaTrusted = true
+    }
     saveLink(dir, link)
     return { renewed: true, seq: cert.seq }
   } catch (e) {

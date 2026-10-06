@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
 import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
+import { adoptRecord } from './record.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
@@ -157,7 +158,7 @@ export async function startRemoteAgent (opts = {}) {
       revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
       // El acta viaja con la lista. Apuntar su `seq` es lo que dispara la renovación en el
       // mismo tic si el dueño nos cambió los permisos.
-      anotarActa(res.acta)
+      await anotarActa(res.acta)
     } catch (e) {
       if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
     }
@@ -210,23 +211,43 @@ export async function startRemoteAgent (opts = {}) {
   }
 
   /**
-   * Guarda el acta que manda la bóveda. Hace dos cosas, y las dos hacen falta:
+   * Guarda el acta que manda la bóveda, SOLO SI SE PUEDE COMPROBAR (`record.js`). Hace dos
+   * cosas, y las dos hacen falta:
    *   · dispara la renovación cuando su `seq` pasa al del papel que tenemos;
    *   · es CON LO QUE SE JUZGA a quien nos habla — quien firma tiene que ser selladora de
    *     este perfil, y eso solo lo dice el acta. Por eso se PERSISTE: si viviera en memoria,
    *     al reiniciar el agente no podría atender a nadie hasta el primer tic.
+   *
+   * Antes se guardaba lo que llegara, de quien llegara: la respuesta de la bóveda no trae
+   * remitente comprobable, así que cualquiera que conociera la llave de esta máquina podía
+   * mandar un acta inventada y nombrarse miembro. Ahora el acta tiene que encadenar desde la
+   * que ya se dio por buena, o venir firmada por la bóveda con la que se enroló.
    */
-  function anotarActa (acta) {
-    if (typeof acta?.seq !== 'number' || link.acta?.seq === acta.seq) return
+  async function anotarActa (acta) {
+    if (typeof acta?.seq !== 'number') return
+    const r = await adoptRecord({ link, candidate: acta, me: myPub })
+    if (!r.adopt) {
+      if (r.reason !== 'misma-acta') {
+        audit('record-rejected', { seq: acta.seq, reason: r.reason })
+        if (!opts.quiet) console.error(`[remote-agent] record #${acta.seq} rejected (${r.reason}); keeping the one already trusted`)
+      }
+      return
+    }
     link.acta = acta
     link.actaSeq = acta.seq
+    link.actaTrusted = true
     try { saveLink(dir, link) } catch (_) {}
   }
 
-  /** El acta con la que se juzga un papel. Sin ella no se atiende a nadie. */
-  const contextoActa = () => (link.acta
-    ? { actaSeq: link.acta.seq, sealers: sealersOf(link.acta) }
-    : { actaSeq: null, sealers: null })
+  /**
+   * El acta con la que se juzga un papel. Sin ella no se atiende a nadie — y un acta que
+   * nunca se comprobó (la que guardó una versión anterior) cuenta como no tenerla.
+   */
+  const actaDeConfianza = () => (link.actaTrusted === true && link.acta ? link.acta : null)
+  const contextoActa = () => {
+    const acta = actaDeConfianza()
+    return acta ? { actaSeq: acta.seq, sealers: sealersOf(acta) } : { actaSeq: null, sealers: null }
+  }
 
   const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
   vaultTick()
@@ -268,8 +289,9 @@ export async function startRemoteAgent (opts = {}) {
     // abrir sesión con otro agente. El bot social se pasó así el 1 de septiembre, con un
     // node de contenido encendido a su lado que le contestaba «ese aparato no firma por este
     // perfil». Se le pide lo que corresponde: que el acta lo nombre y le reconozca `sign`.
-    const isMember = (link.acta?.members || []).some((m) => m?.pub === chk.device)
-    if (!isMember || !memberCan(link.acta, chk.device, 'sign')) {
+    const acta = actaDeConfianza()
+    const isMember = (acta?.members || []).some((m) => m?.pub === chk.device)
+    if (!acta || !isMember || !memberCan(acta, chk.device, 'sign')) {
       return send(from, { type: ERROR, error: 'no autorizado: acta — este perfil no reconoce a ese aparato' })
     }
     if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'handshake inválido' })
