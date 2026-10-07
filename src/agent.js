@@ -65,7 +65,7 @@ class AgentSession {
 }
 
 /**
- * Arranca el agente. Devuelve `{ machine, machineId, master, close }`.
+ * Arranca el agente. Devuelve `{ machine, machineId, master, client, reportIncident, isBlocked, close }`.
  *
  * @param {object} opts
  * @param {string} [opts.label]       qué agente es (`terminal-agent`, `ia-agent`…): lo contesta el pong
@@ -162,16 +162,51 @@ export async function startRemoteAgent (opts = {}) {
 
   // --- Revocación: refrescar la lista del vault por el proxy (best-effort) ---
   let revokedSet = new Set()
+  // LOS BLOQUEADOS (dueño, 2026-10-07): un aprobador bloqueó a ese aparato tras un incidente.
+  // No es una revocación —sigue en el acta, y se deshace en la bóveda—, así que va aparte y
+  // viaja con la lista de revocados. Se PERSISTE en el enlace: con la bóveda apagada, el
+  // agente tiene que seguir cerrándole la puerta a quien ya estaba bloqueado.
+  let blockedSet = new Set(Array.isArray(link.blocked) ? link.blocked : [])
   async function refreshRevocations () {
     try {
       const res = await vaultRpc(VMSG.DEVICES, VMSG.DEVICES_RESULT, { op: 'devices', publickey: myPub, ts: Date.now() })
       revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
+      if (Array.isArray(res.blocked)) takeBlocked(res.blocked)
       // El acta viaja con la lista. Apuntar su `seq` es lo que dispara la renovación en el
       // mismo tic si el dueño nos cambió los permisos.
       await anotarActa(res.acta)
     } catch (e) {
       if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
     }
+  }
+
+  /** La lista nueva de bloqueados: se guarda, y a quien acaba de entrar en ella se le cierra la sesión. */
+  function takeBlocked (pubs) {
+    const next = new Set(pubs.filter((p) => typeof p === 'string'))
+    const same = next.size === blockedSet.size && [...next].every((p) => blockedSet.has(p))
+    blockedSet = next
+    if (same) return
+    link.blocked = [...next]
+    try { saveLink(dir, link) } catch (_) {}
+    for (const [sid, s] of sessions) {
+      if (!blockedSet.has(s.device)) continue
+      s.close(); sessions.delete(sid)
+      audit('session-blocked', { sid: sid.slice(0, 8) })
+      if (!opts.quiet) console.log(`[remote-agent] session ${sid.slice(0, 8)} closed: that device is blocked`)
+    }
+  }
+
+  /**
+   * REPORTAR UN INCIDENTE sobre otro aparato de la cuenta (`about`, su pubkey): la bóveda lo
+   * pone en la mesa de quien aprueba, que bloquea o ignora. Devuelve lo que contestó la
+   * bóveda: `{ id, approvers, blocked }` (`id: null` si nadie aprueba o ya está bloqueado).
+   * No decide nada aquí: un incidente es información, y el freno local es cosa de la app.
+   */
+  async function reportIncident ({ kind, about, tries = null }) {
+    if (typeof kind !== 'string' || !kind || typeof about !== 'string' || !about) throw new Error('reportIncident: kind and about are required')
+    audit('incident', { kind, device: (await pubkeyId(about).catch(() => '')).slice(0, 8).toUpperCase(), tries })
+    const res = await vaultRpc(VMSG.INCIDENT, VMSG.INCIDENT_RESULT, { op: 'incident', kind, about, tries, publickey: myPub, ts: Date.now() })
+    return { id: res.id ?? null, approvers: res.approvers ?? 0, blocked: !!res.blocked }
   }
 
   /**
@@ -321,6 +356,12 @@ export async function startRemoteAgent (opts = {}) {
     if (!acta || !isMember || !memberCan(acta, chk.device, 'sign')) {
       return send(from, { type: ERROR, error: 'no autorizado: acta — este perfil no reconoce a ese aparato' })
     }
+    // BLOQUEADO por un aprobador: está en el acta y su papel vale, y aun así no entra. Se le
+    // dice con su código, que no es lo mismo que un papel viejo ni que una revocación.
+    if (blockedSet.has(chk.device)) {
+      audit('session-refused', { reason: 'blocked', device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
+      return send(from, { type: ERROR, code: 'blocked', error: 'no autorizado: bloqueado — un aprobador bloqueó este aparato; se desbloquea en la bóveda' })
+    }
     if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'handshake inválido' })
 
     const eph = await makeEphemeral()
@@ -386,6 +427,10 @@ export async function startRemoteAgent (opts = {}) {
     // tiene en el acta lo pone el dueño al emparejar y no sirve para saber qué atiende.
     else if (payload.type === PING) send(from, { type: PONG, n: payload.n, kind: opts.label || null })
     else if (payload.type === VMSG.REVOKED) handleRevoked(payload).catch(() => {})
+    // Un aviso de bloqueo o desbloqueo (`vault.admin.event`) no se cree: dispara traer la
+    // lista de la bóveda, que sí va firmada. Así el bloqueo cierra la sesión en el acto, en
+    // vez de esperar al tic de cinco minutos.
+    else if (payload.type === 'vault.admin.event' && (payload.body?.ev === 'blocked' || payload.body?.ev === 'unblocked')) refreshRevocations().catch(() => {})
   })
 
   if (!opts.quiet) {
@@ -393,7 +438,7 @@ export async function startRemoteAgent (opts = {}) {
   }
   if (opts.onReady) { try { opts.onReady({ machine: myPub, machineId: myId, master }) } catch (_) {} }
 
-  return { machine: myPub, machineId: myId, master, client, close: stop }
+  return { machine: myPub, machineId: myId, master, client, reportIncident, isBlocked: (pub) => blockedSet.has(pub), close: stop }
 }
 
 export default { startRemoteAgent }

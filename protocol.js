@@ -26,6 +26,10 @@ export const VMSG = {
   REVOKED: 'vault.revoked',
   RENEW: 'vault.renew',
   RENEWED: 'vault.renewed',
+  // Un INCIDENTE sobre otro aparato de la cuenta (la terminal: tres claves mal seguidas).
+  // La bóveda lo pone en la mesa del aprobador, que bloquea o ignora.
+  INCIDENT: 'vault.incident',
+  INCIDENT_RESULT: 'vault.incident.result',
   ERROR: 'vault.error'
 }
 
