@@ -43,6 +43,10 @@ export class RemoteAgentClient {
     this.sid = null
     this._h = { message: [], error: [], resumed: [] }
     this._resuming = null
+    // El token del agente: una vez que contesta el saludo se le habla POR TOKEN, que es lo
+    // único que sube a WebRTC. `null` es «todavía no lo sé» y se va por su pubkey.
+    this.agentToken = null
+    this._directPeers = new Set()
   }
 
   /** Suscribe a eventos. Devuelve un `off()` para desuscribir. Eventos: message, error, resumed. */
@@ -90,12 +94,26 @@ export class RemoteAgentClient {
   async connect () {
     if (!this.agentPubkey) throw new Error('falta la dirección del agente destino')
     const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
-    this.client = new WebSocketProxyClient({ url: this.proxyUrl, enableWebRTC: false, autoReconnect: true })
+    // SIEMPRE EL CAMINO MÁS DIRECTO: WebRTC encendido. Estuvo en `false` desde el 0.1.0
+    // porque entonces Node no tenía con qué; se quedó así cuando ya lo tuvo, y dos equipos
+    // en la misma red se hablaban dando la vuelta por el proxio.
+    // Solo negocia canal directo quien contestó NUESTRO saludo.
+    this.client = new WebSocketProxyClient({
+      url: this.proxyUrl, autoReconnect: true,
+      acceptDirectFrom: (token) => this._directPeers.has(token)
+    })
     await this.client.connect()
     await this._identify()
     if (this.link.mode !== 'self') {
       this.client.on('token', () => { this._identify().catch(() => {}) })
     }
+
+    // El agente se reinició: su token ya no existe. El pilar ya mandó ese mensaje por su
+    // pubkey; aquí solo se deja de usar el token hasta el próximo saludo.
+    this.client.on('token_gone', (token) => {
+      this._directPeers.delete(token)
+      if (token === this.agentToken) this.agentToken = null
+    })
 
     this.client.on('message', async (_from, p) => {
       if (!p || typeof p !== 'object') return
@@ -151,15 +169,23 @@ export class RemoteAgentClient {
     // varias sesiones simultáneas (varios RemoteAgentClient sobre la misma pubkey)
     // no se roban el ACK de la otra.
     const acked = new Promise((resolve, reject) => {
-      const off = this.client.on('message', (_from, p) => {
+      const off = this.client.on('message', (from, p) => {
         if (!p || typeof p !== 'object') return
-        if (p.type === ACK && p.ack && p.ack.ceph === eph.pub) { off(); resolve(p) }
+        // El token se apunta AQUÍ, en el mismo tic: si el agente es quien abre el canal
+        // directo, su oferta llega justo detrás del ack y tiene que encontrarlo ya.
+        if (p.type === ACK && p.ack && p.ack.ceph === eph.pub) { off(); if (from) this._directPeers.add(from); resolve({ ...p, from }) }
         else if (p.type === ERROR) { off(); reject(new Error(p.error)) }
       })
       setTimeout(() => { off(); reject(new Error('el agente no respondió (¿está corriendo allí?)')) }, 20000)
     })
     this.client.sendByPubkey(this.agentPubkey, { type: HS, data, signature, cert })
     const res = await acked
+    try { await this._checkAck(res, eph) } catch (e) { this._directPeers.delete(res.from); throw e }
+    this.agentToken = res.from || null
+  }
+
+  /** Comprueba el ack y deja `sid` y `key`. */
+  async _checkAck (res, eph) {
 
     // El ack debe: (1) encadenar a NUESTRA maestra, (2) estar firmado por el agente
     // que apuntamos, (3) atar nuestra pub efímera y el sid.
@@ -189,7 +215,11 @@ export class RemoteAgentClient {
     if (this._resuming) await this._resuming
     if (!this.key) throw Object.assign(new Error('no session with the agent'), { code: 'no-session' })
     const env = await seal(this.key, payload)
-    this.client.sendByPubkey(this.agentPubkey, { type: DATA, sid: this.sid, env })
+    const msg = { type: DATA, sid: this.sid, env }
+    // Por token en cuanto se sabe: sube al canal directo, y si el token murió el pilar lo
+    // saca por la pubkey. Por pubkey solo mientras no hay token.
+    if (this.agentToken) this.client.sendToOrQueue(this.agentToken, msg, { peerPubkey: this.agentPubkey })
+    else this.client.sendByPubkey(this.agentPubkey, msg)
   }
 
   /** Sonda de presencia (liveness) sin abrir sesión. Devuelve true si responde. */

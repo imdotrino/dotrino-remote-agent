@@ -87,3 +87,23 @@ test('cualquier otro error del agente sale por error, con su código, y no salud
   assert.equal(c.saludos, 0)
   assert.deepEqual(c.eventos, [['error', 'otra-cosa']])
 })
+
+// SIEMPRE EL CAMINO MÁS DIRECTO: con el token del agente se manda por token (lo único que
+// sube a WebRTC); sin él, por su pubkey.
+test('con el token del agente se manda por token, y sin él por pubkey', async () => {
+  const c = cliente()
+  const porToken = []; const porPubkey = []
+  c.client = {
+    sendToOrQueue: (t, msg, o) => porToken.push([t, msg.type, o.peerPubkey]),
+    sendByPubkey: (pk, msg) => porPubkey.push([pk, msg.type])
+  }
+  c.key = await (await import('../e2e.js')).deriveKey(
+    (await (await import('../e2e.js')).makeEphemeral()).privateKey,
+    (await (await import('../e2e.js')).makeEphemeral()).pub, 'sid')
+  c.sid = 'sid'
+  await c.send({ type: 'input', data: 'a' })
+  c.agentToken = 'TOK'
+  await c.send({ type: 'input', data: 'b' })
+  assert.equal(porPubkey.length, 1)
+  assert.deepEqual(porToken, [['TOK', 'ra.data', c.agentPubkey]])
+})

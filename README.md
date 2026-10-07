@@ -182,6 +182,19 @@ extraerlo luego a este paquete.
 - **Auditoría** local de cada sesión abierta.
 - El relay de transporte (`proxy.dotrino.com`) **solo ve bytes cifrados**.
 
+## Por dónde viaja: el camino más directo (0.15.0+)
+
+El saludo sale por el proxio, dirigido a la pubkey del agente. En cuanto el agente contesta,
+las dos puntas se hablan **por token**, y el pilar sube solo a un canal WebRTC: en la misma
+red los datos de la sesión no salen a internet. Si el canal no sale, sigue por el proxio.
+
+- **En Node hace falta una implementación de WebRTC.** El agente que quiera canal directo
+  declara `@dotrino/webrtc` en sus `optionalDependencies`; sin él, todo sigue por el proxio.
+- **Quién puede negociar un canal directo:** en el agente, solo un token con sesión abierta;
+  en el cliente, solo el token que contestó su saludo.
+- Si el agente se reinicia, su token muere: el mensaje sale por su pubkey, el agente
+  contesta `unknown-session` y el cliente vuelve a saludar.
+
 ## Dependencias
 
 - `@dotrino/identity` (capabilities: `verifyChain`, `signWithDevice`, `verifyDeviceSig`,

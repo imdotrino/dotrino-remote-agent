@@ -97,14 +97,23 @@ export async function startRemoteAgent (opts = {}) {
 
   installNodeGlobals(dir)
 
+  // sid -> AgentSession
+  const sessions = new Map()
+  const hasSessionFrom = (token) => { for (const s of sessions.values()) if (s.from === token) return true; return false }
+
   const proxyUrl = opts.proxyUrl || process.env.PROXY_URL || link.proxy || 'wss://proxy.dotrino.com'
   // `client` inyectado: solo para las pruebas (transporte de mentira). En producción se
   // levanta el del ecosistema — no hay otro transporte.
   const client = opts.client || await (async () => {
     const { getWebSocketProxyClient } = await import('@dotrino/proxy-client')
+    // SIEMPRE EL CAMINO MÁS DIRECTO: WebRTC encendido (si la máquina tiene con qué: el
+    // pilar carga `@dotrino/webrtc` si está instalado, y si no sigue por el proxio).
+    // Solo negocia canal directo quien YA tiene una sesión abierta: negociar arranca
+    // DTLS/ICE/SCTP, y eso no lo dispara cualquiera que conozca el token.
     const c = getWebSocketProxyClient({
-      url: proxyUrl, enableWebRTC: false, autoReconnect: true,
-      maxReconnectAttempts: 100000, reconnectDelay: 4000
+      url: proxyUrl, autoReconnect: true,
+      maxReconnectAttempts: 100000, reconnectDelay: 4000,
+      acceptDirectFrom: (token) => hasSessionFrom(token)
     })
     await c.connect()
     return c
@@ -253,8 +262,6 @@ export async function startRemoteAgent (opts = {}) {
   vaultTick()
   const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
 
-  // sid -> AgentSession
-  const sessions = new Map()
   const sweeper = setInterval(() => {
     const now = Date.now()
     for (const [sid, s] of sessions) {
