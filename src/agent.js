@@ -26,6 +26,7 @@ import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
 import { adoptRecord } from './record.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
+import { makeCatchUp } from './catch-up.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
 import { loadLink, saveLink, dataDir } from './link.js'
 
@@ -259,6 +260,8 @@ export async function startRemoteAgent (opts = {}) {
   }
 
   const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
+  /** Trae el acta ahora (con freno) y dice si AVANZÓ: solo entonces merece juzgar otra vez. */
+  const catchUp = makeCatchUp({ refresh: vaultTick, seq: () => link.actaSeq })
   vaultTick()
   const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
 
@@ -280,8 +283,25 @@ export async function startRemoteAgent (opts = {}) {
     // Manda el acta, no una llave fija: con varias selladoras el papel de un peer puede
     // venir firmado por otra bóveda del mismo perfil. Sin acta no se atiende — no hay con
     // qué decidir, así que no se decide que sí.
-    const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...contextoActa(), revoked: revokedSet })
-    if (!chk.ok) return send(from, { type: ERROR, error: 'no autorizado: ' + chk.reason })
+    // SE JUZGA, Y SI NO PASA SE PREGUNTA A LA BÓVEDA ANTES DE DECIR QUE NO. El acta se trae cada
+    // `REVOKE_REFRESH_MS` (5 min), así que un aparato recién emparejado era un desconocido hasta
+    // el siguiente tic: «este perfil no reconoce a ese aparato» nada más emparejar (un iPhone, el
+    // 2026-10-07). Ahora, ante un rechazo, se trae el acta EN EL MOMENTO y se juzga otra vez, una
+    // sola — y solo si el acta avanzó. Con freno (`catchUp`): cualquiera puede mandar saludos, y
+    // no por eso se le pregunta a la bóveda cada vez.
+    const judge = async () => {
+      const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...contextoActa(), revoked: revokedSet })
+      if (!chk.ok) return { error: 'no autorizado: ' + chk.reason }
+      return { chk }
+    }
+    let verdict = await judge()
+    const known = (v) => {
+      const acta = actaDeConfianza()
+      return !!acta && (acta.members || []).some((m) => m?.pub === v.chk.device) && memberCan(acta, v.chk.device, 'sign')
+    }
+    if ((verdict.error || !known(verdict)) && await catchUp()) verdict = await judge()
+    if (verdict.error) return send(from, { type: ERROR, error: verdict.error })
+    const chk = verdict.chk
     // CERT ∩ ACTA. `verifyChain` comprueba QUIÉN EMITIÓ el papel; que el APARATO siga siendo
     // isMember y pueda firmar lo dice el acta, y hay que preguntárselo aparte. Sin esto, un
     // papel bien firmado por una selladora abría sesión aunque el acta no nombrara a ese
