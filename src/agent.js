@@ -77,6 +77,7 @@ class AgentSession {
  * @param {()=>void} [opts.onRevoked] se llamó al auto-borrarse por revocación.
  * @param {()=>void} [opts.onReady]   agente listo y escuchando.
  * @param {boolean} [opts.quiet]      sin logs.
+ * @param {number} [opts.netLogMs]    cada cuánto van al log las estadísticas de red (5 min).
  * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
  *
  * Devuelve además el **`client`** (el `WebSocketProxyClient` ya conectado e
@@ -394,8 +395,18 @@ export async function startRemoteAgent (opts = {}) {
     s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'sobre inválido' }))
   }
 
+  // POR DÓNDE VA EL TRÁFICO, AL LOG. Un agente no tiene topbar: sin esto, saber si una
+  // sesión subió a WebRTC o sigue dando la vuelta por el proxio pedía una prueba aparte.
+  // Lo escribe el pilar (`logStats`), que lee los clientes del proceso; aquí solo se enciende.
+  let net = null
+  if (!opts.quiet) {
+    const { logStats } = await import('@dotrino/proxy-client')
+    net = logStats({ label: 'remote-agent', everyMs: opts.netLogMs })
+  }
+
   const stop = () => {
     clearInterval(revTimer); clearInterval(sweeper)
+    if (net) net.stop().catch(() => {})
     for (const s of sessions.values()) s.close()
     try { client.close() } catch {}
   }
