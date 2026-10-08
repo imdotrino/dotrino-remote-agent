@@ -32,12 +32,13 @@ import { loadLink, saveLink, dataDir } from './link.js'
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
 class AgentSession {
-  constructor ({ sid, key, from, device, send }) {
+  constructor ({ sid, key, from, device, send, isDirect = null }) {
     this.sid = sid
     this.key = key
     this.from = from                  // token del cliente en el proxy
     this.device = device              // pubkey del dispositivo cliente
     this._send = send                 // (to, obj) => void
+    this._isDirect = isDirect         // (token) => boolean, o null si el transporte no lo sabe
     this._h = { message: [], close: [] }
     this._closed = false
   }
@@ -47,6 +48,33 @@ class AgentSession {
     if (this._closed) return
     const env = await seal(this.key, payload).catch(() => null)
     if (env) this._send(this.from, { type: DATA, sid: this.sid, env })
+  }
+
+  /**
+   * ¿VA YA POR EL CANAL DIRECTO (WebRTC) lo que se le mande a este cliente? Mientras sea
+   * `false`, cada `send` da la vuelta por el proxio. Sirve para que la app decida qué manda
+   * YA y qué puede esperar: nunca para dejar de mandar (subir de escalón no bloquea).
+   */
+  direct () {
+    if (this._closed || !this._isDirect) return false
+    try { return !!this._isDirect(this.from) } catch (_) { return false }
+  }
+
+  /**
+   * Espera a que abra el canal directo, como mucho `ms`. Resuelve `true` si abrió y `false`
+   * si se acabó el plazo o la sesión se cerró — en los dos casos se sigue, por donde haya.
+   */
+  whenDirect (ms = 8000) {
+    return new Promise((resolve) => {
+      const until = Date.now() + ms
+      const look = () => {
+        if (this.direct()) return resolve(true)
+        if (this._closed || Date.now() >= until) return resolve(false)
+        const t = setTimeout(look, 100)
+        t.unref?.()
+      }
+      look()
+    })
   }
 
   on (ev, cb) { this._h[ev]?.push(cb); return this }
@@ -375,7 +403,7 @@ export async function startRemoteAgent (opts = {}) {
     const ack = { op: ACK, sid, seph: eph.pub, ceph: data.eph, machine: myPub, publickey: myPub, ts: Date.now() }
     const { signature: ackSig } = await signWithDevice({ privateJwk: link.device.privateJwk, data: ack })
 
-    const session = new AgentSession({ sid, key, from, device: chk.device, send })
+    const session = new AgentSession({ sid, key, from, device: chk.device, send, isDirect: typeof client.isWebRTCOpen === 'function' ? (t) => client.isWebRTCOpen(t) : null })
     session._exp = Date.now() + SESSION_TTL_MS
     sessions.set(sid, session)
     audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
