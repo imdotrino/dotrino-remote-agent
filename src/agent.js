@@ -27,7 +27,7 @@ import { adoptRecord } from './record.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { makeCatchUp } from './catch-up.js'
-import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, REVOKE_REFRESH_MS } from '../protocol.js'
+import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SESSION_GONE_MS, REVOKE_REFRESH_MS } from '../protocol.js'
 import { loadLink, saveLink, dataDir } from './link.js'
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
@@ -88,6 +88,7 @@ class AgentSession {
   close () {
     if (this._closed) return
     this._closed = true
+    clearTimeout(this._gone)
     for (const h of this._h.close) { try { h() } catch (_) {} }
   }
 }
@@ -105,6 +106,7 @@ class AgentSession {
  * @param {()=>void} [opts.onRevoked] se llamó al auto-borrarse por revocación.
  * @param {()=>void} [opts.onReady]   agente listo y escuchando.
  * @param {boolean} [opts.quiet]      sin logs.
+ * @param {number} [opts.sessionGoneMs]  cuánto se espera a un cliente cuya conexión se fue (`SESSION_GONE_MS`).
  * @param {number} [opts.netLogMs]    cada cuánto van al log las estadísticas de red (5 min).
  * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
  *
@@ -420,8 +422,26 @@ export async function startRemoteAgent (opts = {}) {
     if (!s) return send(from, { type: ERROR, code: 'unknown-session', sid: p.sid, error: 'sesión desconocida o expirada' })
     s._exp = Date.now() + SESSION_TTL_MS
     s.from = from
+    if (s._gone) { clearTimeout(s._gone); s._gone = null }
     s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'sobre inválido' }))
   }
+
+  // LA CONEXIÓN DEL CLIENTE SE FUE: su sesión no se queda 30 minutos. El proxio avisa de que ese
+  // token murió (`peer_disconnected`); un token no vuelve, así que quien sigue vivo manda desde
+  // otro y la sesión se queda (`handleData`). Si en `SESSION_GONE_MS` no llega nada, se cierra.
+  // Antes solo vencía por `SESSION_TTL_MS`: un teléfono que volvía del fondo abría sesión nueva
+  // y la vieja seguía enganchada a su consola (seis del mismo aparato en una, el 2026-10-09).
+  const goneMs = opts.sessionGoneMs ?? SESSION_GONE_MS
+  client.on('peer_disconnected', (token) => {
+    for (const [sid, s] of sessions) {
+      if (s.from !== token || s._gone) continue
+      s._gone = setTimeout(() => {
+        s.close(); sessions.delete(sid)
+        audit('session-gone', { sid: sid.slice(0, 8) })
+      }, goneMs)
+      s._gone.unref?.()
+    }
+  })
 
   // POR DÓNDE VA EL TRÁFICO, AL LOG. Un agente no tiene topbar: sin esto, saber si una
   // sesión subió a WebRTC o sigue dando la vuelta por el proxio pedía una prueba aparte.

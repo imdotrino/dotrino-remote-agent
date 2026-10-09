@@ -39,6 +39,11 @@ export const SIGN_SCOPE = 'vault:sign'
 /** Vigencia de una sesión inactiva y refresco de la lista de revocados. */
 export const SESSION_TTL_MS = 30 * 60 * 1000
 export const REVOKE_REFRESH_MS = 5 * 60 * 1000
+/**
+ * Cuánto se espera a un cliente cuya conexión se fue antes de cerrarle la sesión. Un cliente
+ * que reconecta sigue con su sesión desde un token nuevo: si en este plazo manda algo, se queda.
+ */
+export const SESSION_GONE_MS = 20 * 1000
 
 /**
  * RENOVACIÓN del cert de esta máquina. El cert dura 30 días; se pide uno fresco
