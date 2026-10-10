@@ -29,14 +29,22 @@ import { PING, PONG } from '../protocol.js'
  *   `'ia-agent'`). Omitir = todos los que tengan nameOf y no sean `'cli'` (un navegador
  *   enrolado queda como `cli` y no atiende a nadie).
  * @returns {Promise<Array<{sub:string,label:string,cn:string|null}>>} uno por miembro.
+ * @throws `code: 'no-acta'` si ni la bóveda ni lo guardado dan el acta: no se sabe, y no es «ninguno».
  */
 export async function listAgentsByLabel (id, label) {
   // Por su efecto: trae el acta vigente y la adopta. La lista de aparatos que devuelva —si
   // devuelve alguna— no se mira: quién es de la cuenta lo dice el acta.
   let acta = null
-  try { acta = (await id.listVaultDevices())?.acta || null } catch (_) {}
-  if (!acta) acta = (await id.profileActa?.().catch(() => null))?.acta || null
-  if (!acta) return []
+  let why = null
+  try { acta = (await id.listVaultDevices())?.acta || null } catch (e) { why = e }
+  // La bóveda no contestó: vale el acta que ya se tiene guardada.
+  if (!acta) acta = (await id.profileActa?.().catch((e) => { why = why || e; return null }))?.acta || null
+  // SIN ACTA NO SE SABE quién es de la cuenta, y eso no es «no hay nadie». Devolver una lista
+  // vacía aquí hacía que una máquina con la bóveda inalcanzable dijera «no tienes otras
+  // máquinas» con toda tranquilidad. Se para y se dice.
+  if (!acta) {
+    throw Object.assign(new Error(`could not get the account record (acta) from the vault${why ? `: ${why.message}` : ''}`), { code: 'no-acta', cause: why || undefined })
+  }
 
   const mine = id.me?.publickey
   const nameOf = (m) => m.cn || m.label || null

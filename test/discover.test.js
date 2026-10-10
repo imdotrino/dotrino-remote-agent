@@ -52,9 +52,12 @@ test('sin label: todos los que tienen nombre menos los navegadores (`cli`)', asy
   assert.deepEqual(found.map((a) => a.sub).sort(), [NODE, PHONE].sort())
 })
 
-test('sin acta no se inventa nada: lista vacía', async () => {
+test('sin acta no se sabe: se dice, no se contesta «ninguno»', async () => {
   const id = { me: { publickey: ME }, listVaultDevices: async () => ({ devices: [] }), profileActa: async () => null }
-  assert.deepEqual(await listAgentsByLabel(id, 'content'), [])
+  await assert.rejects(listAgentsByLabel(id, 'content'), { code: 'no-acta' })
+  // Y el motivo de la bóveda viaja en el mensaje: es lo que hay que arreglar.
+  const mudo = { me: { publickey: ME }, listVaultDevices: async () => { throw new Error('the vault did not answer') }, profileActa: async () => null }
+  await assert.rejects(listAgentsByLabel(mudo, 'content'), (e) => e.code === 'no-acta' && /the vault did not answer/.test(e.message))
 })
 
 test('si la bóveda no contesta, se usa el acta que ya se tiene guardada', async () => {
