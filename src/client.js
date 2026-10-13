@@ -115,10 +115,13 @@ export class RemoteAgentClient {
       if (token === this.agentToken) this.agentToken = null
     })
 
-    this.client.on('message', async (_from, p) => {
+    this.client.on('message', (_from, p) => {
       if (!p || typeof p !== 'object') return
       if (p.type === DATA && p.sid === this.sid) {
-        try { const m = await open(this.key, p.env); this._emit('message', m) } catch {}
+        // Se entregan en el orden en que llegaron: descifrar tarda según el tamaño, y sin
+        // esta cola un mensaje pequeño adelantaba a uno grande que llegó antes.
+        const opened = open(this.key, p.env).then((m) => ({ m }), () => null)
+        this._in = (this._in || Promise.resolve()).then(() => opened).then((r) => { if (r) this._emit('message', r.m) })
       } else if (p.type === ERROR) {
         this._onAgentError(p)
       }
@@ -214,12 +217,18 @@ export class RemoteAgentClient {
   async send (payload) {
     if (this._resuming) await this._resuming
     if (!this.key) throw Object.assign(new Error('no session with the agent'), { code: 'no-session' })
-    const env = await seal(this.key, payload)
-    const msg = { type: DATA, sid: this.sid, env }
-    // Por token en cuanto se sabe: sube al canal directo, y si el token murió el pilar lo
-    // saca por la pubkey. Por pubkey solo mientras no hay token.
-    if (this.agentToken) this.client.sendToOrQueue(this.agentToken, msg, { peerPubkey: this.agentPubkey })
-    else this.client.sendByPubkey(this.agentPubkey, msg)
+    // Salen en el orden en que se pidieron, tarde lo que tarde en cifrarse cada uno.
+    const sid = this.sid
+    const sealed = seal(this.key, payload)
+    const turn = (this._out || Promise.resolve()).then(() => sealed).then((env) => {
+      const msg = { type: DATA, sid, env }
+      // Por token en cuanto se sabe: sube al canal directo, y si el token murió el pilar lo
+      // saca por la pubkey. Por pubkey solo mientras no hay token.
+      if (this.agentToken) this.client.sendToOrQueue(this.agentToken, msg, { peerPubkey: this.agentPubkey })
+      else this.client.sendByPubkey(this.agentPubkey, msg)
+    })
+    this._out = turn.catch(() => {})
+    return turn
   }
 
   /** Sonda de presencia (liveness) sin abrir sesión. Devuelve true si responde. */

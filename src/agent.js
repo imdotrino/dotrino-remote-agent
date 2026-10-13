@@ -31,7 +31,7 @@ import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SES
 import { loadLink, saveLink, dataDir } from './link.js'
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
-class AgentSession {
+export class AgentSession {
   constructor ({ sid, key, from, device, send, isDirect = null }) {
     this.sid = sid
     this.key = key
@@ -44,10 +44,16 @@ class AgentSession {
   }
 
   /** Envía un payload de dominio cifrado al cliente. */
-  async send (payload) {
-    if (this._closed) return
-    const env = await seal(this.key, payload).catch(() => null)
-    if (env) this._send(this.from, { type: DATA, sid: this.sid, env })
+  send (payload) {
+    if (this._closed) return Promise.resolve()
+    // SALEN EN EL ORDEN EN QUE SE PIDIERON. Cifrar tarda según el tamaño: sin esta cola, un
+    // mensaje pequeño adelantaba a uno grande pedido antes (en la terminal, lo que la consola
+    // pintaba llegaba antes que su pantalla inicial, y esta lo tapaba después).
+    const sealed = seal(this.key, payload).catch(() => null)
+    this._out = (this._out || Promise.resolve()).then(() => sealed).then((env) => {
+      if (env && !this._closed) this._send(this.from, { type: DATA, sid: this.sid, env })
+    })
+    return this._out
   }
 
   /**
@@ -79,10 +85,13 @@ class AgentSession {
 
   on (ev, cb) { this._h[ev]?.push(cb); return this }
 
-  async _ingest (env) {
-    let msg
-    try { msg = await open(this.key, env) } catch { return }
-    for (const h of this._h.message) { try { h(msg) } catch (_) {} }
+  /** Lo que llega se entrega en el orden en que llegó, tarde lo que tarde en descifrarse cada uno. */
+  _ingest (env) {
+    const opened = open(this.key, env).then((msg) => ({ msg }), () => null)
+    this._in = (this._in || Promise.resolve()).then(() => opened).then((r) => {
+      if (r) for (const h of this._h.message) { try { h(r.msg) } catch (_) {} }
+    })
+    return this._in
   }
 
   close () {
