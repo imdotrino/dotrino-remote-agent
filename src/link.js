@@ -20,6 +20,7 @@ import { signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
 import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { adoptRecord } from './record.js'
+import { verifySealerChain } from '@dotrino/identity/acta'
 
 export function dataDir (name = 'dotrino-remote-agent') {
   if (process.env.DOTRINO_REMOTE_AGENT_DIR) return process.env.DOTRINO_REMOTE_AGENT_DIR
@@ -116,7 +117,12 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
   return {
     me: { publickey: device.publickey },
     async signData (data) {
-      return signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
+      const firmado = await signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
+      // A NOMBRE DE QUIÉN VA, igual que en el navegador: el `profileId` y la cadena de
+      // selladores que lo prueba (`refreshChain`). Sin cadena la firma vale ante la bóveda
+      // (que conoce el papel) pero no ante un extraño que use `verifySignedFor`.
+      const chain = Array.isArray(link.sealerChain) && link.sealerChain.length ? link.sealerChain : null
+      return { ...firmado, profileId: chain ? chain[0].profileId : null, chain }
     },
     async getVaultCert () { return { cert: link.cert } },
     async vaultStatus () {
@@ -192,9 +198,41 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
   }
 }
 
+/**
+ * TRAE LA CADENA DE SELLADORES de la cuenta y la guarda en el enlace: con ella `signData`
+ * firma a nombre de la cuenta de forma que `verifySignedFor` lo compruebe desde el génesis.
+ * Se comprueba ANTES de guardarla (`verifySealerChain`): una cadena que no encadena o que es
+ * de otra cuenta no entra. Un agente que firma de cara a terceros la pide al arrancar y la
+ * refresca de vez en cuando. No lanza: devuelve qué pasó.
+ *
+ * @returns {Promise<{ ok: boolean, seq?: number, reason?: string }>}
+ */
+export async function refreshChain (link, { dir = dataDir() } = {}) {
+  if (!link?.device?.privateJwk || !link?.cert || !link?.iss) return { ok: false, reason: 'invalid link' }
+  installNodeGlobals(dir)
+  try {
+    const res = await requestDevices({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
+    const chain = res.sealerChain
+    if (!Array.isArray(chain) || !chain.length) return { ok: false, reason: 'the vault sent no sealer chain (vaultd < 0.154.0?)' }
+    const expected = link.sealerChain?.[0]?.profileId ?? link.acta?.profileId ?? null
+    const v = await verifySealerChain(chain, { expectedProfileId: expected })
+    if (!v.ok) return { ok: false, reason: 'bad sealer chain: ' + v.reason }
+    const head = chain[chain.length - 1]
+    if (typeof link.sealerChain?.[link.sealerChain.length - 1]?.seq === 'number' && head.seq < link.sealerChain[link.sealerChain.length - 1].seq) {
+      return { ok: false, reason: 'older than the chain already stored' }
+    }
+    link.sealerChain = chain
+    saveLink(dir, link)
+    return { ok: true, seq: head.seq }
+  } catch (e) {
+    // Un fallo de red llega a veces sin frase: se dice el código, o al menos que no se alcanzó.
+    return { ok: false, reason: e?.message || e?.code || 'unreachable' }
+  }
+}
+
 /** El enlace como lo esperan `ContentClient.connect({ link })` y `RemoteAgentClient`. */
 export function clientLink (link, opts) {
   return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com' }
 }
 
-export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink, renewLink }
+export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink, renewLink, refreshChain }

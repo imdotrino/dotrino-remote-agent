@@ -67,3 +67,30 @@ test('renewLink: se renueva un papel del modelo viejo y uno atrasado; no uno al 
   const atras = { device, cert: { seq: 3 }, actaSeq: 8, iss: 'x', proxy: 'wss://p' }
   assert.notEqual((await renewLink(atras, { dir: '/nonexistent' })).reason, 'not due')
 })
+
+/**
+ * FIRMAR A NOMBRE DE LA CUENTA desde Node. Hasta aquí `signData` daba solo la firma del
+ * aparato, y un extraño con `verifySignedFor` no tenía con qué atarla a la cuenta: solo el
+ * navegador llevaba la cadena de selladores. Ahora va en el enlace (`refreshChain`) y sale
+ * con cada firma, como en el navegador.
+ */
+test('signData lleva el profileId y la cadena de selladores si el enlace la tiene', async () => {
+  const device = await makeDeviceKey({ label: 'bot' })
+  const genesis = { v: 5, seq: 1, profileId: '{"kty":"EC","x":"g"}', sealedBy: '{"kty":"EC","x":"g"}', members: [] }
+  const sin = { device, cert: { seq: 1 }, iss: 'x', proxy: 'wss://p' }
+  const con = { ...sin, sealerChain: [genesis] }
+  const data = { op: 'claim', h: 'abc' }
+  const a = await identityFromLink(sin, { dir: '/nonexistent' }).signData(data)
+  assert.equal(a.chain, null); assert.equal(a.profileId, null)
+  const b = await identityFromLink(con, { dir: '/nonexistent' }).signData(data)
+  assert.deepEqual(b.chain, [genesis]); assert.equal(b.profileId, genesis.profileId)
+  assert.ok(await verifyDeviceSig({ publickey: device.publickey, data, signature: b.signature }))
+})
+
+test('refreshChain: sin enlace válido no hace nada, y sin red lo dice en vez de lanzar', async () => {
+  const { refreshChain } = await import('../src/link.js')
+  assert.deepEqual(await refreshChain({}, { dir: '/nonexistent' }), { ok: false, reason: 'invalid link' })
+  const device = await makeDeviceKey({ label: 'bot' })
+  const r = await refreshChain({ device, cert: { seq: 1 }, iss: 'x', proxy: 'ws://127.0.0.1:1' }, { dir: '/nonexistent' })
+  assert.equal(r.ok, false); assert.ok(r.reason)
+})
