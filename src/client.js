@@ -92,7 +92,7 @@ export class RemoteAgentClient {
   }
 
   async connect () {
-    if (!this.agentPubkey) throw new Error('falta la dirección del agente destino')
+    if (!this.agentPubkey) throw new Error('the target agent address is missing')
     const { WebSocketProxyClient } = await import('@dotrino/proxy-client')
     // SIEMPRE EL CAMINO MÁS DIRECTO: WebRTC encendido. Estuvo en `false` desde el 0.1.0
     // porque entonces Node no tenía con qué; se quedó así cuando ya lo tuvo, y dos equipos
@@ -179,7 +179,7 @@ export class RemoteAgentClient {
         if (p.type === ACK && p.ack && p.ack.ceph === eph.pub) { off(); if (from) this._directPeers.add(from); resolve({ ...p, from }) }
         else if (p.type === ERROR) { off(); reject(new Error(p.error)) }
       })
-      setTimeout(() => { off(); reject(new Error('el agente no respondió (¿está corriendo allí?)')) }, 20000)
+      setTimeout(() => { off(); reject(new Error('the agent did not reply (is it running there?)')) }, 20000)
     })
     this.client.sendByPubkey(this.agentPubkey, { type: HS, data, signature, cert })
     const res = await acked
@@ -205,9 +205,9 @@ export class RemoteAgentClient {
       data: res.ack, signature: res.signature, cert: res.cert, trustedIssuer: this.link.iss,
       actaSeq: acta?.seq ?? null, sealers: acta ? sealersOf(acta) : null
     })
-    if (!chk.ok) throw new Error('el agente no está certificado por tu vault: ' + chk.reason)
-    if (res.ack.machine !== this.agentPubkey) throw new Error('el ack vino de otro agente')
-    if (res.ack.ceph !== eph.pub || res.ack.sid !== res.sid) throw new Error('ack no corresponde a este handshake')
+    if (!chk.ok) throw new Error('the agent is not certified by your vault: ' + chk.reason)
+    if (res.ack.machine !== this.agentPubkey) throw new Error('the ack came from another agent')
+    if (res.ack.ceph !== eph.pub || res.ack.sid !== res.sid) throw new Error('the ack does not match this handshake')
 
     this.sid = res.sid
     this.key = await deriveKey(eph.privateKey, res.ack.seph, res.sid)

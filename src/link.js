@@ -117,12 +117,12 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
   return {
     me: { publickey: device.publickey },
     async signData (data) {
-      const firmado = await signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
+      const signed = await signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
       // A NOMBRE DE QUIÉN VA, igual que en el navegador: el `profileId` y la cadena de
       // selladores que lo prueba (`refreshChain`). Sin cadena la firma vale ante la bóveda
       // (que conoce el papel) pero no ante un extraño que use `verifySignedFor`.
       const chain = Array.isArray(link.sealerChain) && link.sealerChain.length ? link.sealerChain : null
-      return { ...firmado, profileId: chain ? chain[0].profileId : null, chain }
+      return { ...signed, profileId: chain ? chain[0].profileId : null, chain }
     },
     async getVaultCert () { return { cert: link.cert } },
     async vaultStatus () {
@@ -167,12 +167,12 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
   // EL PAPEL DEL MODELO VIEJO SE CAMBIA SÍ O SÍ. Lleva `exp` y no `seq`; se acepta por el
   // repliegue de migración pero muere en su fecha, y con él la máquina. Los demás se
   // renuevan cuando el acta va por delante — nunca por calendario, que el papel no vence.
-  const legado = typeof link.cert.seq !== 'number'
-  if (legado && typeof link.cert.exp === 'number' && link.cert.exp <= Date.now()) {
+  const legacy = typeof link.cert.seq !== 'number'
+  if (legacy && typeof link.cert.exp === 'number' && link.cert.exp <= Date.now()) {
     return { renewed: false, reason: 'expired: enroll again' }
   }
-  const atrasado = typeof link.actaSeq === 'number' && typeof link.cert.seq === 'number' && link.actaSeq > link.cert.seq
-  if (!force && !legado && !atrasado) return { renewed: false, seq: link.cert.seq, reason: 'not due' }
+  const behind = typeof link.actaSeq === 'number' && typeof link.cert.seq === 'number' && link.actaSeq > link.cert.seq
+  if (!force && !legacy && !behind) return { renewed: false, seq: link.cert.seq, reason: 'not due' }
   installNodeGlobals(dir)
   try {
     // `requestRenew` ya JUZGA lo que devuelve (`checkVaultReply` del pilar: acta bien

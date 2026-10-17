@@ -56,8 +56,8 @@ test('sin acta no se sabe: se dice, no se contesta «ninguno»', async () => {
   const id = { me: { publickey: ME }, listVaultDevices: async () => ({ devices: [] }), profileActa: async () => null }
   await assert.rejects(listAgentsByLabel(id, 'content'), { code: 'no-acta' })
   // Y el motivo de la bóveda viaja en el mensaje: es lo que hay que arreglar.
-  const mudo = { me: { publickey: ME }, listVaultDevices: async () => { throw new Error('the vault did not answer') }, profileActa: async () => null }
-  await assert.rejects(listAgentsByLabel(mudo, 'content'), (e) => e.code === 'no-acta' && /the vault did not answer/.test(e.message))
+  const mute = { me: { publickey: ME }, listVaultDevices: async () => { throw new Error('the vault did not answer') }, profileActa: async () => null }
+  await assert.rejects(listAgentsByLabel(mute, 'content'), (e) => e.code === 'no-acta' && /the vault did not answer/.test(e.message))
 })
 
 test('si la bóveda no contesta, se usa el acta que ya se tiene guardada', async () => {
@@ -101,9 +101,9 @@ test('probeAgents: un agente viejo que contesta sin kind sale con kind null', as
 test('probeAgents: el ping es EFÍMERO — a quien no está no se le encola ni se le timbra', async () => {
   // El teléfono sonaba cada minuto sin ningún pedido: la app preguntaba a todos los aparatos
   // de la cuenta, y el proxio encolaba el ping del que no estaba conectado y le timbraba.
-  const opciones = []
-  const c = { on: () => () => {}, sendByPubkey: (_s, _p, o) => { opciones.push(o) } }
+  const options = []
+  const c = { on: () => () => {}, sendByPubkey: (_s, _p, o) => { options.push(o) } }
   await probeAgents(c, [NODE, PHONE], { timeoutMs: 10 })
-  assert.equal(opciones.length, 2)
-  assert.ok(opciones.every((o) => o?.ephemeral === true), JSON.stringify(opciones))
+  assert.equal(options.length, 2)
+  assert.ok(options.every((o) => o?.ephemeral === true), JSON.stringify(options))
 })

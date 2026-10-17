@@ -14,7 +14,7 @@ function home () {
   process.env.DOTRINO_AGENT_HOME = d
   return path.join(d, 'ia-agent')
 }
-const enlazar = (root, n) => { fs.mkdirSync(path.join(root, n), { recursive: true }); fs.writeFileSync(path.join(root, n, 'link.json'), '{}') }
+const linkUp = (root, n) => { fs.mkdirSync(path.join(root, n), { recursive: true }); fs.writeFileSync(path.join(root, n, 'link.json'), '{}') }
 
 test('sin ninguno enlazado, el primero se llama default', () => {
   const root = home()
@@ -22,12 +22,12 @@ test('sin ninguno enlazado, el primero se llama default', () => {
 })
 
 test('con uno solo, no hace falta nombrarlo', () => {
-  const root = home(); enlazar(root, 'proyecto-a')
+  const root = home(); linkUp(root, 'proyecto-a')
   assert.equal(resolveInstance('ia-agent').name, 'proyecto-a')
 })
 
 test('con dos, sin nombre se para y dice cuáles hay', () => {
-  const root = home(); enlazar(root, 'proyecto-a'); enlazar(root, 'proyecto-b')
+  const root = home(); linkUp(root, 'proyecto-a'); linkUp(root, 'proyecto-b')
   assert.deepEqual(listInstances('ia-agent'), ['proyecto-a', 'proyecto-b'])
   assert.throws(() => resolveInstance('ia-agent'), /proyecto-a, proyecto-b/)
   assert.equal(resolveInstance('ia-agent', 'proyecto-b').name, 'proyecto-b')

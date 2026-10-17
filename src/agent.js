@@ -130,7 +130,7 @@ export async function startRemoteAgent (opts = {}) {
   const dir = opts.dir || dataDir()
   const link = opts.link || loadLink(dir)
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) {
-    throw new Error('esta máquina no está enlazada. Ejecuta primero el enrolamiento (enroll) de tu agente.')
+    throw new Error('this machine is not linked: enroll your agent first')
   }
   const master = link.iss
   const myPub = link.device.publickey
@@ -214,7 +214,7 @@ export async function startRemoteAgent (opts = {}) {
       if (Array.isArray(res.blocked)) takeBlocked(res.blocked)
       // El acta viaja con la lista. Apuntar su `seq` es lo que dispara la renovación en el
       // mismo tic si el dueño nos cambió los permisos.
-      await anotarActa(res.acta)
+      await recordActa(res.acta)
     } catch (e) {
       if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
     }
@@ -270,10 +270,10 @@ export async function startRemoteAgent (opts = {}) {
     //     máquina. Sin esta rama la migración no terminaba nunca — el disparador comparaba
     //     `seq` y un papel viejo no tiene, así que nunca saltaba.
     //   · o el acta que hemos visto va por delante del papel: el dueño cambió permisos.
-    const legado = typeof link.cert?.seq !== 'number'
-    const visto = link.actaSeq
-    const atrasado = typeof visto === 'number' && typeof link.cert?.seq === 'number' && visto > link.cert.seq
-    if (!legado && !atrasado) return
+    const legacy = typeof link.cert?.seq !== 'number'
+    const seenSeq = link.actaSeq
+    const behind = typeof seenSeq === 'number' && typeof link.cert?.seq === 'number' && seenSeq > link.cert.seq
+    if (!legacy && !behind) return
     try {
       const res = await vaultRpc(VMSG.RENEW, VMSG.RENEWED, { op: 'renew', publickey: myPub, ts: Date.now() })
       const cert = res?.cert
@@ -308,7 +308,7 @@ export async function startRemoteAgent (opts = {}) {
    * mandar un acta inventada y nombrarse miembro. Ahora el acta tiene que encadenar desde la
    * que ya se dio por buena, o venir firmada por la bóveda con la que se enroló.
    */
-  async function anotarActa (acta) {
+  async function recordActa (acta) {
     if (typeof acta?.seq !== 'number') return
     const r = await adoptRecord({ link, candidate: acta, me: myPub })
     if (!r.adopt) {
@@ -328,9 +328,9 @@ export async function startRemoteAgent (opts = {}) {
    * El acta con la que se juzga un papel. Sin ella no se atiende a nadie — y un acta que
    * nunca se comprobó (la que guardó una versión anterior) cuenta como no tenerla.
    */
-  const actaDeConfianza = () => (link.actaTrusted === true && link.acta ? link.acta : null)
-  const contextoActa = () => {
-    const acta = actaDeConfianza()
+  const trustedActa = () => (link.actaTrusted === true && link.acta ? link.acta : null)
+  const actaContext = () => {
+    const acta = trustedActa()
     return acta ? { actaSeq: acta.seq, sealers: sealersOf(acta) } : { actaSeq: null, sealers: null }
   }
 
@@ -349,11 +349,11 @@ export async function startRemoteAgent (opts = {}) {
 
   async function handleHandshake (from, p) {
     const { data, signature, cert } = p
-    if (!data || !signature || !cert) return send(from, { type: ERROR, error: 'handshake incompleto' })
+    if (!data || !signature || !cert) return send(from, { type: ERROR, error: 'incomplete handshake' })
     // FRESCURA anti-replay: el HS debe ser reciente (±5 min); sin esto un relay
     // malicioso podía reproducir handshakes viejos (sesiones huérfanas / DoS).
     if (typeof data.ts !== 'number' || Math.abs(Date.now() - data.ts) > 5 * 60 * 1000) {
-      return send(from, { type: ERROR, error: 'handshake vencido (posible replay, o el reloj del dispositivo está desfasado)' })
+      return send(from, { type: ERROR, error: 'stale handshake (possible replay, or the device clock is off)' })
     }
     // Manda el acta, no una llave fija: con varias selladoras el papel de un peer puede
     // venir firmado por otra bóveda del mismo perfil. Sin acta no se atiende — no hay con
@@ -365,13 +365,13 @@ export async function startRemoteAgent (opts = {}) {
     // sola — y solo si el acta avanzó. Con freno (`catchUp`): cualquiera puede mandar saludos, y
     // no por eso se le pregunta a la bóveda cada vez.
     const judge = async () => {
-      const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...contextoActa(), revoked: revokedSet })
+      const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...actaContext(), revoked: revokedSet })
       if (!chk.ok) return { error: 'no autorizado: ' + chk.reason }
       return { chk }
     }
     let verdict = await judge()
     const known = (v) => {
-      const acta = actaDeConfianza()
+      const acta = trustedActa()
       return !!acta && (acta.members || []).some((m) => m?.pub === v.chk.device) && memberCan(acta, v.chk.device, 'sign')
     }
     if ((verdict.error || !known(verdict)) && await catchUp()) verdict = await judge()
@@ -391,7 +391,7 @@ export async function startRemoteAgent (opts = {}) {
     // abrir sesión con otro agente. El bot social se pasó así el 1 de septiembre, con un
     // node de contenido encendido a su lado que le contestaba «ese aparato no firma por este
     // perfil». Se le pide lo que corresponde: que el acta lo nombre y le reconozca `sign`.
-    const acta = actaDeConfianza()
+    const acta = trustedActa()
     const isMember = (acta?.members || []).some((m) => m?.pub === chk.device)
     if (!acta || !isMember || !memberCan(acta, chk.device, 'sign')) {
       return send(from, { type: ERROR, error: 'no autorizado: acta — este perfil no reconoce a ese aparato' })
@@ -402,7 +402,7 @@ export async function startRemoteAgent (opts = {}) {
       audit('session-refused', { reason: 'blocked', device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
       return send(from, { type: ERROR, code: 'blocked', error: 'no autorizado: bloqueado — un aprobador bloqueó este aparato; se desbloquea en la bóveda' })
     }
-    if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'handshake inválido' })
+    if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'invalid handshake' })
 
     const eph = await makeEphemeral()
     const sid = [...crypto.getRandomValues(new Uint8Array(16))].map((x) => x.toString(16).padStart(2, '0')).join('')
@@ -419,7 +419,7 @@ export async function startRemoteAgent (opts = {}) {
     sessions.set(sid, session)
     audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
     send(from, { type: ACK, sid, ack, signature: ackSig, cert: link.cert })
-    if (!opts.quiet) console.log(`[remote-agent] sesión ${sid.slice(0, 8)} autorizada (device ${chk.device?.slice?.(0, 8) || '?'})`)
+    if (!opts.quiet) console.log(`[remote-agent] session ${sid.slice(0, 8)} authorized (device ${chk.device?.slice?.(0, 8) || '?'})`)
     if (opts.onSession) { try { opts.onSession(session) } catch (e) { if (!opts.quiet) console.error('[remote-agent] onSession:', e.message) } }
   }
 
@@ -428,11 +428,11 @@ export async function startRemoteAgent (opts = {}) {
     // Con `code` y el `sid`: así el cliente sabe que es SU sesión la que se perdió (el agente
     // se reinició, o venció) y vuelve a saludar solo, en vez de quedarse con un error. Se
     // comprueba por el código, no por la frase.
-    if (!s) return send(from, { type: ERROR, code: 'unknown-session', sid: p.sid, error: 'sesión desconocida o expirada' })
+    if (!s) return send(from, { type: ERROR, code: 'unknown-session', sid: p.sid, error: 'unknown or expired session' })
     s._exp = Date.now() + SESSION_TTL_MS
     s.from = from
     if (s._gone) { clearTimeout(s._gone); s._gone = null }
-    s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'sobre inválido' }))
+    s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'invalid envelope' }))
   }
 
   // LA CONEXIÓN DEL CLIENTE SE FUE: su sesión no se queda 30 minutos. El proxio avisa de que ese
@@ -479,7 +479,7 @@ export async function startRemoteAgent (opts = {}) {
     if (typeof b.exp === 'number' && Date.now() > b.exp) return
     if (!await verifyDeviceSig({ publickey: master, data: b, signature: p.signature })) return
     audit('revoked', { nonce: b.nonce })
-    if (!opts.quiet) console.log('\n[remote-agent] tu bóveda REVOCÓ esta máquina → borro el enlace y salgo.')
+    if (!opts.quiet) console.log('\n[remote-agent] your vault REVOKED this machine → deleting the link and exiting.')
     try { fs.rmSync(path.join(dir, 'link.json'), { force: true }) } catch (_) {}
     stop()
     if (opts.onRevoked) { try { opts.onRevoked() } catch (_) {} }

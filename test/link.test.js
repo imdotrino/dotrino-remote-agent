@@ -50,22 +50,22 @@ test('renewLink: se renueva un papel del modelo viejo y uno atrasado; no uno al 
   const device = await makeDeviceKey({ label: 'bot' })
 
   // Al día: mismo `seq` que el acta que hemos visto. No hay nada que pedir.
-  const alDia = { device, cert: { seq: 9 }, actaSeq: 9, iss: 'x', proxy: 'wss://p' }
-  assert.deepEqual(await renewLink(alDia, { dir: '/nonexistent' }), { renewed: false, seq: 9, reason: 'not due' })
+  const upToDate = { device, cert: { seq: 9 }, actaSeq: 9, iss: 'x', proxy: 'wss://p' }
+  assert.deepEqual(await renewLink(upToDate, { dir: '/nonexistent' }), { renewed: false, seq: 9, reason: 'not due' })
 
   // Del modelo viejo: se intenta (falla por la red, que es lo que se puede comprobar aquí),
   // y lo que importa es que NO conteste «not due» — eso era lo que dejaba la migración a
   // medias para siempre.
-  const viejo = { device, cert: { exp: Date.now() + 20 * 86400000 }, iss: 'x', proxy: 'wss://p' }
-  assert.notEqual((await renewLink(viejo, { dir: '/nonexistent' })).reason, 'not due')
+  const old = { device, cert: { exp: Date.now() + 20 * 86400000 }, iss: 'x', proxy: 'wss://p' }
+  assert.notEqual((await renewLink(old, { dir: '/nonexistent' })).reason, 'not due')
 
   // Ya vencido: ahí no hay renovación que valga, toca re-emparejar.
-  const muerto = { device, cert: { exp: Date.now() - 1 }, iss: 'x', proxy: 'wss://p' }
-  assert.equal((await renewLink(muerto, { dir: '/nonexistent' })).reason, 'expired: enroll again')
+  const dead = { device, cert: { exp: Date.now() - 1 }, iss: 'x', proxy: 'wss://p' }
+  assert.equal((await renewLink(dead, { dir: '/nonexistent' })).reason, 'expired: enroll again')
 
   // Atrasado respecto del acta: también se intenta.
-  const atras = { device, cert: { seq: 3 }, actaSeq: 8, iss: 'x', proxy: 'wss://p' }
-  assert.notEqual((await renewLink(atras, { dir: '/nonexistent' })).reason, 'not due')
+  const back = { device, cert: { seq: 3 }, actaSeq: 8, iss: 'x', proxy: 'wss://p' }
+  assert.notEqual((await renewLink(back, { dir: '/nonexistent' })).reason, 'not due')
 })
 
 /**
@@ -77,12 +77,12 @@ test('renewLink: se renueva un papel del modelo viejo y uno atrasado; no uno al 
 test('signData lleva el profileId y la cadena de selladores si el enlace la tiene', async () => {
   const device = await makeDeviceKey({ label: 'bot' })
   const genesis = { v: 5, seq: 1, profileId: '{"kty":"EC","x":"g"}', sealedBy: '{"kty":"EC","x":"g"}', members: [] }
-  const sin = { device, cert: { seq: 1 }, iss: 'x', proxy: 'wss://p' }
-  const con = { ...sin, sealerChain: [genesis] }
+  const noChain = { device, cert: { seq: 1 }, iss: 'x', proxy: 'wss://p' }
+  const withChain = { ...noChain, sealerChain: [genesis] }
   const data = { op: 'claim', h: 'abc' }
-  const a = await identityFromLink(sin, { dir: '/nonexistent' }).signData(data)
+  const a = await identityFromLink(noChain, { dir: '/nonexistent' }).signData(data)
   assert.equal(a.chain, null); assert.equal(a.profileId, null)
-  const b = await identityFromLink(con, { dir: '/nonexistent' }).signData(data)
+  const b = await identityFromLink(withChain, { dir: '/nonexistent' }).signData(data)
   assert.deepEqual(b.chain, [genesis]); assert.equal(b.profileId, genesis.profileId)
   assert.ok(await verifyDeviceSig({ publickey: device.publickey, data, signature: b.signature }))
 })

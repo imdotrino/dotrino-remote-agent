@@ -17,7 +17,7 @@ import { startRemoteAgent } from '../src/agent.js'
 import { HS, ACK, ERROR, VMSG } from '../protocol.js'
 import { makeEphemeral } from '../e2e.js'
 
-async function boveda () {
+async function vault () {
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
   const iss = JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey))
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
@@ -48,10 +48,10 @@ function bus () {
   return { endpoint }
 }
 
-const espera = (ms) => new Promise((r) => setTimeout(r, ms))
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
 test('bloqueado: no saluda, se le cierra la sesión abierta, y la lista sobrevive en el enlace', async () => {
-  const v = await boveda(); const b = bus()
+  const v = await vault(); const b = bus()
   const machine = await makeDeviceKey({ label: 'terminal' })
   const laptop = await makeDeviceKey({ label: 'laptop' })
   await v.admit(machine.publickey, 'terminal'); await v.admit(laptop.publickey, 'laptop')
@@ -69,26 +69,26 @@ test('bloqueado: no saluda, se le cierra la sesión abierta, y la lista sobreviv
   })
   await vaultEp.identifyAs({ publickey: v.iss })
 
-  const sesiones = []
-  const agent = await startRemoteAgent({ dir, quiet: true, client: b.endpoint('tok-agent'), onSession: (s) => sesiones.push(s) })
-  await espera(50)
+  const sessions = []
+  const agent = await startRemoteAgent({ dir, quiet: true, client: b.endpoint('tok-agent'), onSession: (s) => sessions.push(s) })
+  await wait(50)
 
   // El portátil saluda y entra.
   const laptopEp = b.endpoint('tok-laptop')
-  const respuestas = []
-  laptopEp.on('message', (_f, p) => respuestas.push(p))
-  const saludar = async () => {
+  const replies = []
+  laptopEp.on('message', (_f, p) => replies.push(p))
+  const greet = async () => {
     const eph = await makeEphemeral()
     const data = { op: HS, eph: eph.pub, publickey: laptop.publickey, ts: Date.now() }
     const { signature } = await signWithDevice({ privateJwk: laptop.privateJwk, data })
     laptopEp.send('tok-agent', { type: HS, data, signature, cert: await v.cert(laptop.publickey) })
-    await espera(100)
-    return respuestas[respuestas.length - 1]
+    await wait(100)
+    return replies[replies.length - 1]
   }
-  assert.equal((await saludar()).type, ACK)
-  assert.equal(sesiones.length, 1)
-  let cerrada = false
-  sesiones[0].on('close', () => { cerrada = true })
+  assert.equal((await greet()).type, ACK)
+  assert.equal(sessions.length, 1)
+  let closed = false
+  sessions[0].on('close', () => { closed = true })
 
   // El agente reporta un incidente sobre el portátil: va firmado a la bóveda.
   const r = await agent.reportIncident({ kind: 'bad-code', about: laptop.publickey, tries: 3 })
@@ -99,21 +99,21 @@ test('bloqueado: no saluda, se le cierra la sesión abierta, y la lista sobreviv
   // El aprobador bloqueó: la bóveda avisa, el agente trae la lista y le cierra la sesión.
   blocked = [laptop.publickey]
   vaultEp.sendByPubkey(machine.publickey, { type: 'vault.admin.event', body: { ev: 'blocked', deviceId: 'XXXX-0000' }, acta: v.acta })
-  await espera(100)
-  assert.equal(cerrada, true, 'la sesión abierta se cierra en el acto')
+  await wait(100)
+  assert.equal(closed, true, 'la sesión abierta se cierra en el acto')
   assert.equal(agent.isBlocked(laptop.publickey), true)
-  const otra = await saludar()
-  assert.equal(otra.type, ERROR)
-  assert.equal(otra.code, 'blocked')
+  const another = await greet()
+  assert.equal(another.type, ERROR)
+  assert.equal(another.code, 'blocked')
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'link.json'), 'utf8')).blocked, [laptop.publickey], 'persistido en el enlace')
   agent.close()
 
   // Sin bóveda: el agente arranca con la lista guardada y sigue cerrando la puerta.
   vaultEp._h.length = 0
-  const agent2 = await startRemoteAgent({ dir, quiet: true, client: b.endpoint('tok-agent'), onSession: (s) => sesiones.push(s) })
-  await espera(50)
+  const agent2 = await startRemoteAgent({ dir, quiet: true, client: b.endpoint('tok-agent'), onSession: (s) => sessions.push(s) })
+  await wait(50)
   assert.equal(agent2.isBlocked(laptop.publickey), true)
-  assert.equal((await saludar()).code, 'blocked')
+  assert.equal((await greet()).code, 'blocked')
   agent2.close()
   fs.rmSync(dir, { recursive: true, force: true })
 })

@@ -18,7 +18,7 @@ import { startRemoteAgent } from '../src/agent.js'
 import { HS, ACK, DATA, VMSG } from '../protocol.js'
 import { makeEphemeral, deriveKey, seal } from '../e2e.js'
 
-async function boveda () {
+async function vault () {
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
   const iss = JSON.stringify(await crypto.subtle.exportKey('jwk', pair.publicKey))
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
@@ -54,11 +54,11 @@ function bus () {
   return { endpoint, drop }
 }
 
-const espera = (ms) => new Promise((r) => setTimeout(r, ms))
+const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 const GONE_MS = 150
 
-async function montar () {
-  const v = await boveda(); const b = bus()
+async function mount () {
+  const v = await vault(); const b = bus()
   const machine = await makeDeviceKey({ label: 'terminal' })
   const phone = await makeDeviceKey({ label: 'teléfono' })
   await v.admit(machine.publickey, 'terminal'); await v.admit(phone.publickey, 'teléfono')
@@ -68,12 +68,12 @@ async function montar () {
   const vaultEp = b.endpoint('tok-vault')
   vaultEp.on('message', (from, p) => { if (p?.type === VMSG.DEVICES) vaultEp.send(from, { type: VMSG.DEVICES_RESULT, devices: [], revoked: [], blocked: [], acta: v.acta }) })
   await vaultEp.identifyAs({ publickey: v.iss })
-  const sesiones = []
-  const agent = await startRemoteAgent({ dir, quiet: true, sessionGoneMs: GONE_MS, client: b.endpoint('tok-agent'), onSession: (s) => sesiones.push(s) })
-  await espera(50)
+  const sessions = []
+  const agent = await startRemoteAgent({ dir, quiet: true, sessionGoneMs: GONE_MS, client: b.endpoint('tok-agent'), onSession: (s) => sessions.push(s) })
+  await wait(50)
 
   /** Saluda desde `token` y devuelve con qué seguir hablando por esa sesión. */
-  const saludar = async (token) => {
+  const greet = async (token) => {
     const ep = b.endpoint(token)
     let ack = null
     ep.on('message', (_f, p) => { if (p?.type === ACK) ack = p })
@@ -81,51 +81,51 @@ async function montar () {
     const data = { op: HS, eph: eph.pub, publickey: phone.publickey, ts: Date.now() }
     const { signature } = await signWithDevice({ privateJwk: phone.privateJwk, data })
     ep.send('tok-agent', { type: HS, data, signature, cert: await v.cert(phone.publickey) })
-    await espera(100)
+    await wait(100)
     assert.ok(ack, 'el agente contestó el saludo')
     return { sid: ack.sid, key: await deriveKey(eph.privateKey, ack.ack.seph, ack.sid) }
   }
-  const fin = () => { agent.close(); fs.rmSync(dir, { recursive: true, force: true }) }
-  return { b, sesiones, saludar, fin }
+  const end = () => { agent.close(); fs.rmSync(dir, { recursive: true, force: true }) }
+  return { b, sessions, greet, end }
 }
 
 test('la conexión se fue y no vuelve: la sesión se cierra pasado el plazo', async () => {
-  const { b, sesiones, saludar, fin } = await montar()
-  await saludar('tok-phone-1')
-  let cerrada = false
-  sesiones[0].on('close', () => { cerrada = true })
+  const { b, sessions, greet, end } = await mount()
+  await greet('tok-phone-1')
+  let closed = false
+  sessions[0].on('close', () => { closed = true })
   b.drop('tok-phone-1')
-  await espera(GONE_MS / 3)
-  assert.equal(cerrada, false, 'no se cierra en el acto: puede estar reconectando')
-  await espera(GONE_MS)
-  assert.equal(cerrada, true)
-  fin()
+  await wait(GONE_MS / 3)
+  assert.equal(closed, false, 'no se cierra en el acto: puede estar reconectando')
+  await wait(GONE_MS)
+  assert.equal(closed, true)
+  end()
 })
 
 test('reconecta y sigue con su sesión desde otro token: se la queda', async () => {
-  const { b, sesiones, saludar, fin } = await montar()
-  const { sid, key } = await saludar('tok-phone-1')
-  let cerrada = false
-  const recibidos = []
-  sesiones[0].on('close', () => { cerrada = true })
-  sesiones[0].on('message', (m) => recibidos.push(m))
+  const { b, sessions, greet, end } = await mount()
+  const { sid, key } = await greet('tok-phone-1')
+  let closed = false
+  const received = []
+  sessions[0].on('close', () => { closed = true })
+  sessions[0].on('message', (m) => received.push(m))
   b.drop('tok-phone-1')
   b.endpoint('tok-phone-2').send('tok-agent', { type: DATA, sid, env: await seal(key, { type: 'list' }) })
-  await espera(GONE_MS * 2)
-  assert.deepEqual(recibidos, [{ type: 'list' }])
-  assert.equal(cerrada, false)
-  assert.equal(sesiones[0].from, 'tok-phone-2')
-  fin()
+  await wait(GONE_MS * 2)
+  assert.deepEqual(received, [{ type: 'list' }])
+  assert.equal(closed, false)
+  assert.equal(sessions[0].from, 'tok-phone-2')
+  end()
 })
 
 test('la baja de un token no toca las sesiones de otro', async () => {
-  const { b, sesiones, saludar, fin } = await montar()
-  await saludar('tok-phone-1')
-  await saludar('tok-phone-2')
-  const cerradas = []
-  sesiones.forEach((s, i) => s.on('close', () => cerradas.push(i)))
+  const { b, sessions, greet, end } = await mount()
+  await greet('tok-phone-1')
+  await greet('tok-phone-2')
+  const closedOnes = []
+  sessions.forEach((s, i) => s.on('close', () => closedOnes.push(i)))
   b.drop('tok-phone-1')
-  await espera(GONE_MS * 2)
-  assert.deepEqual(cerradas, [0])
-  fin()
+  await wait(GONE_MS * 2)
+  assert.deepEqual(closedOnes, [0])
+  end()
 })
