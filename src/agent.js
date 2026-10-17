@@ -21,7 +21,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId } from '@dotrino/identity/capabilities'
+import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId, keyLabel } from '@dotrino/identity/capabilities'
 import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
 import { adoptRecord } from './record.js'
 import { installNodeGlobals } from '../node-globals.js'
@@ -134,7 +134,7 @@ export async function startRemoteAgent (opts = {}) {
   }
   const master = link.iss
   const myPub = link.device.publickey
-  const myId = (await pubkeyId(myPub)).slice(0, 8).toUpperCase().replace(/(.{4})(.{4})/, '$1-$2')
+  const myId = await keyLabel(myPub)
 
   installNodeGlobals(dir)
 
