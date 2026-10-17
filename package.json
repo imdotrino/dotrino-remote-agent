@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/remote-agent",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "Middleware compartido del ecosistema Dotrino para apps de agente remoto cifrado punto a punto (handshake E2E, emparejamiento SAS con vault, revocación, descubrimiento). Lo consumen dotrino-terminal (PTY) y dotrino-ia (chat con IA).",
   "type": "module",
   "main": "./index.js",
@@ -9,6 +9,7 @@
     "./agent": "./src/agent.js",
     "./client": "./src/client.js",
     "./link": "./src/link.js",
+    "./browser-link": "./src/browser-link.js",
     "./discover": "./src/discover.js",
     "./node-globals": "./node-globals.js",
     "./instances": "./src/instances.js"
