@@ -366,7 +366,7 @@ export async function startRemoteAgent (opts = {}) {
     // no por eso se le pregunta a la bóveda cada vez.
     const judge = async () => {
       const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...actaContext(), revoked: revokedSet })
-      if (!chk.ok) return { error: 'no autorizado: ' + chk.reason }
+      if (!chk.ok) return { code: 'unauthorized', reason: chk.reason, error: 'unauthorized: ' + chk.reason }
       return { chk }
     }
     let verdict = await judge()
@@ -375,7 +375,7 @@ export async function startRemoteAgent (opts = {}) {
       return !!acta && (acta.members || []).some((m) => m?.pub === v.chk.device) && memberCan(acta, v.chk.device, 'sign')
     }
     if ((verdict.error || !known(verdict)) && await catchUp()) verdict = await judge()
-    if (verdict.error) return send(from, { type: ERROR, error: verdict.error })
+    if (verdict.error) return send(from, { type: ERROR, code: verdict.code, reason: verdict.reason, error: verdict.error })
     const chk = verdict.chk
     // CERT ∩ ACTA. `verifyChain` comprueba QUIÉN EMITIÓ el papel; que el APARATO siga siendo
     // isMember y pueda firmar lo dice el acta, y hay que preguntárselo aparte. Sin esto, un
@@ -394,13 +394,13 @@ export async function startRemoteAgent (opts = {}) {
     const acta = trustedActa()
     const isMember = (acta?.members || []).some((m) => m?.pub === chk.device)
     if (!acta || !isMember || !memberCan(acta, chk.device, 'sign')) {
-      return send(from, { type: ERROR, error: 'no autorizado: acta — este perfil no reconoce a ese aparato' })
+      return send(from, { type: ERROR, code: 'unauthorized', reason: 'not-in-record', error: 'unauthorized: not-in-record' })
     }
     // BLOQUEADO por un aprobador: está en el acta y su papel vale, y aun así no entra. Se le
     // dice con su código, que no es lo mismo que un papel viejo ni que una revocación.
     if (blockedSet.has(chk.device)) {
       audit('session-refused', { reason: 'blocked', device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
-      return send(from, { type: ERROR, code: 'blocked', error: 'no autorizado: bloqueado — un aprobador bloqueó este aparato; se desbloquea en la bóveda' })
+      return send(from, { type: ERROR, code: 'blocked', reason: 'blocked', error: 'unauthorized: blocked' })
     }
     if (data.op !== HS || typeof data.eph !== 'string') return send(from, { type: ERROR, error: 'invalid handshake' })
 
@@ -502,7 +502,7 @@ export async function startRemoteAgent (opts = {}) {
   })
 
   if (!opts.quiet) {
-    console.log(`[remote-agent] agente activo · máquina ${myId} · vault ${(await pubkeyId(master)).slice(0, 16)} · proxy ${proxyUrl}`)
+    console.log(`[remote-agent] agent running · machine ${myId} · vault ${(await pubkeyId(master)).slice(0, 16)} · proxy ${proxyUrl}`)
   }
   if (opts.onReady) { try { opts.onReady({ machine: myPub, machineId: myId, master }) } catch (_) {} }
 

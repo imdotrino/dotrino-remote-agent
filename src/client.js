@@ -139,7 +139,7 @@ export class RemoteAgentClient {
    * de antes de volver a saludar) no dice nada nuevo y se ignora.
    */
   _onAgentError (p) {
-    if (p.code !== 'unknown-session') { this._emit('error', Object.assign(new Error(p.error), { code: p.code })); return }
+    if (p.code !== 'unknown-session') { this._emit('error', Object.assign(new Error(p.error), { code: p.code, reason: p.reason })); return }
     if (p.sid !== this.sid) return
     this._resume()
   }
@@ -177,7 +177,7 @@ export class RemoteAgentClient {
         // El token se apunta AQUÍ, en el mismo tic: si el agente es quien abre el canal
         // directo, su oferta llega justo detrás del ack y tiene que encontrarlo ya.
         if (p.type === ACK && p.ack && p.ack.ceph === eph.pub) { off(); if (from) this._directPeers.add(from); resolve({ ...p, from }) }
-        else if (p.type === ERROR) { off(); reject(new Error(p.error)) }
+        else if (p.type === ERROR) { off(); reject(Object.assign(new Error(p.error), { code: p.code, reason: p.reason })) }
       })
       setTimeout(() => { off(); reject(new Error('the agent did not reply (is it running there?)')) }, 20000)
     })
