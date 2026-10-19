@@ -67,6 +67,11 @@ const ra = await startRemoteAgent({
 //   bóveda de que OTRO aparato de la cuenta hizo algo (la terminal: tres claves mal seguidas).
 //   Quien aprueba lo ve y bloquea o ignora; bloqueado, no saluda a ningún agente (`code: 'blocked'`)
 //   y la lista viaja con la de revocados y queda en el enlace (`link.blocked`). ra.isBlocked(pub).
+// ra.checkCap(session.device, 'admin') → { ok: true, seq } | { ok: false, code } (0.23.0): ¿ese
+//   aparato tiene ese permiso en el acta? Se pregunta en CADA petición contra el acta de confianza
+//   del agente, nunca contra lo que diga el cliente. Si no pasa, trae el acta en el momento (con
+//   freno) y vuelve a juzgar. Códigos: `no-record` (no hay acta de confianza: no se sabe),
+//   `not-in-record`, `missing-cap`. ra.record() → esa acta (o null).
 // ra.client → el WebSocketProxyClient ya conectado e identificado bajo esta
 //   máquina. Si tu agente necesita algo más del transporte (anunciarse en un
 //   canal, por ejemplo), REUSA este: abrir una segunda conexión sería un segundo

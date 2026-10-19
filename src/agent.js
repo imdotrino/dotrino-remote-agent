@@ -103,7 +103,7 @@ export class AgentSession {
 }
 
 /**
- * Arranca el agente. Devuelve `{ machine, machineId, master, client, reportIncident, isBlocked, close }`.
+ * Arranca el agente. Devuelve `{ machine, machineId, master, client, reportIncident, isBlocked, checkCap, record, close }`.
  *
  * @param {object} opts
  * @param {string} [opts.label]       qué agente es (`terminal-agent`, `ia-agent`…): lo contesta el pong
@@ -491,12 +491,38 @@ export async function startRemoteAgent (opts = {}) {
     else if (payload.type === 'vault.admin.event' && (payload.body?.ev === 'blocked' || payload.body?.ev === 'unblocked')) refreshRevocations().catch(() => {})
   })
 
+  /**
+   * ¿PUEDE ESTE APARATO `cap` según el acta? Para la app que atiende la sesión y tiene que
+   * decidir algo más que «abrir sesión» (un servicio que solo deja administrar a quien tiene
+   * `admin`). Se pregunta en CADA petición contra el acta de confianza del agente —la misma
+   * con la que se juzga el saludo—, nunca contra lo que diga el cliente.
+   *
+   * Si no pasa, se trae el acta en el momento y se juzga otra vez (con el freno de `catchUp`):
+   * un permiso recién concedido no espera al tic de cinco minutos.
+   *
+   * Sin repliegue: sin acta no se sabe, y se dice con su código.
+   * @returns {Promise<{ ok: true, seq: number } | { ok: false, code: 'no-record'|'not-in-record'|'missing-cap' }>}
+   */
+  async function checkCap (pub, cap) {
+    if (typeof pub !== 'string' || !pub || typeof cap !== 'string' || !cap) throw Object.assign(new Error('checkCap: pub and cap are required'), { code: 'bad-request' })
+    const look = () => {
+      const acta = trustedActa()
+      if (!acta) return { ok: false, code: 'no-record' }
+      if (!(acta.members || []).some((m) => m?.pub === pub)) return { ok: false, code: 'not-in-record' }
+      if (!memberCan(acta, pub, cap)) return { ok: false, code: 'missing-cap' }
+      return { ok: true, seq: acta.seq }
+    }
+    let r = look()
+    if (!r.ok && await catchUp()) r = look()
+    return r
+  }
+
   if (!opts.quiet) {
     console.log(`[remote-agent] agent running · machine ${myId} · vault ${(await pubkeyId(master)).slice(0, 16)} · proxy ${proxyUrl}`)
   }
   if (opts.onReady) { try { opts.onReady({ machine: myPub, machineId: myId, master }) } catch (_) {} }
 
-  return { machine: myPub, machineId: myId, master, client, reportIncident, isBlocked: (pub) => blockedSet.has(pub), close: stop }
+  return { machine: myPub, machineId: myId, master, client, reportIncident, isBlocked: (pub) => blockedSet.has(pub), checkCap, record: trustedActa, close: stop }
 }
 
 export default { startRemoteAgent }
