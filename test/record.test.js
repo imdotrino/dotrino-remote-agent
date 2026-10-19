@@ -80,7 +80,7 @@ test('con acta de confianza: nunca hacia atrás', async () => {
   const { vault, machine, acta } = await account()
   const next = await admit(acta, vault, (await makeDeviceKey()).publickey)
   const link = { iss: vault.publickey, cert: { seq: acta.seq }, acta: next, actaTrusted: true }
-  assert.deepEqual(await adoptRecord({ link, candidate: acta, me: machine.publickey }), { adopt: false, reason: 'seq-menor' })
+  assert.deepEqual(await adoptRecord({ link, candidate: acta, me: machine.publickey }), { adopt: false, reason: 'lower-seq' })
 })
 
 test('sin bóveda fijada no se adopta nada', async () => {

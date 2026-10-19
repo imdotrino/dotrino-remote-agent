@@ -312,7 +312,7 @@ export async function startRemoteAgent (opts = {}) {
     if (typeof acta?.seq !== 'number') return
     const r = await adoptRecord({ link, candidate: acta, me: myPub })
     if (!r.adopt) {
-      if (r.reason !== 'misma-acta') {
+      if (r.reason !== 'same-record') {
         audit('record-rejected', { seq: acta.seq, reason: r.reason })
         if (!opts.quiet) console.error(`[remote-agent] record #${acta.seq} rejected (${r.reason}); keeping the one already trusted`)
       }
