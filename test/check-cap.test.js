@@ -60,6 +60,9 @@ test('checkCap: dice si el aparato tiene el permiso en el acta, y trae el acta n
   const vaultEp = b.endpoint('tok-vault')
   vaultEp.on('message', (from, p) => {
     if (p?.type === VMSG.DEVICES) vaultEp.send(from, { type: VMSG.DEVICES_RESULT, devices: [], revoked: [], blocked: [], acta: v.acta })
+    // Con el acta nueva el agente pide renovar su papel: aquí no se renueva, se dice que no. Sin
+    // respuesta se quedaba esperando un temporizador `unref` y Node 20 daba la prueba por colgada.
+    else if (p?.type === VMSG.RENEW) vaultEp.send(from, { type: VMSG.ERROR, error: 'renew is not part of this test' })
   })
   await vaultEp.identifyAs({ publickey: v.iss })
   const agent = await startRemoteAgent({ dir, quiet: true, client: b.endpoint('tok-agent') })
