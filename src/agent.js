@@ -27,8 +27,8 @@ import { adoptRecord } from './record.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { makeCatchUp } from './catch-up.js'
-import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SESSION_GONE_MS, REVOKE_REFRESH_MS } from '../protocol.js'
-import { loadLink, saveLink, dataDir } from './link.js'
+import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SESSION_GONE_MS, REVOKE_REFRESH_MS, DEFAULT_PROXY } from '../protocol.js'
+import { loadLink, saveLink, dataDir, renewalReason, storeRenewedCert } from './link.js'
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
 export class AgentSession {
@@ -142,7 +142,7 @@ export async function startRemoteAgent (opts = {}) {
   const sessions = new Map()
   const hasSessionFrom = (token) => { for (const s of sessions.values()) if (s.from === token) return true; return false }
 
-  const proxyUrl = opts.proxyUrl || process.env.PROXY_URL || link.proxy || 'wss://proxy.dotrino.com'
+  const proxyUrl = opts.proxyUrl || process.env.PROXY_URL || link.proxy || DEFAULT_PROXY
   // `client` inyectado: solo para las pruebas (transporte de mentira). En producción se
   // levanta el del ecosistema — no hay otro transporte.
   const client = opts.client || await (async () => {
@@ -264,16 +264,8 @@ export async function startRemoteAgent (opts = {}) {
    * que una segunda bóveda pueda emitir; lo que se fija es el perfil.
    */
   async function renewCertIfNeeded () {
-    // DOS MOTIVOS PARA PEDIR PAPEL NUEVO:
-    //   · el nuestro es del MODELO VIEJO (lleva `exp` y no `seq`). Ese hay que cambiarlo sí
-    //     o sí: se acepta por el repliegue de migración, pero muere en su fecha y con él la
-    //     máquina. Sin esta rama la migración no terminaba nunca — el disparador comparaba
-    //     `seq` y un papel viejo no tiene, así que nunca saltaba.
-    //   · o el acta que hemos visto va por delante del papel: el dueño cambió permisos.
-    const legacy = typeof link.cert?.seq !== 'number'
-    const seenSeq = link.actaSeq
-    const behind = typeof seenSeq === 'number' && typeof link.cert?.seq === 'number' && seenSeq > link.cert.seq
-    if (!legacy && !behind) return
+    // La regla de cuándo toca (papel del modelo viejo, o acta por delante) es UNA, en link.js.
+    if (!renewalReason(link)) return
     try {
       const res = await vaultRpc(VMSG.RENEW, VMSG.RENEWED, { op: 'renew', publickey: myPub, ts: Date.now() })
       const cert = res?.cert
@@ -282,9 +274,7 @@ export async function startRemoteAgent (opts = {}) {
       // `acta.profileId === master`, que con una segunda bóveda nunca es verdad.
       const chk = await checkVaultReply({ acta, cert, vault: master, sub: myPub, scope: SIGN_SCOPE })
       if (!chk.ok) throw new Error('invalid renewed cert: ' + chk.reason)
-      link.cert = cert
-      link.actaSeq = acta.seq
-      saveLink(dir, link)
+      await storeRenewedCert({ dir, link, cert, acta })
       audit('cert-renew', { seq: cert.seq })
       if (!opts.quiet) console.log(`[remote-agent] cert renewed against record #${cert.seq}`)
     } catch (e) {

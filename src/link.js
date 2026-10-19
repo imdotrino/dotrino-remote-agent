@@ -21,6 +21,7 @@ import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { adoptRecord } from './record.js'
 import { verifySealerChain } from '@dotrino/identity/acta'
+import { DEFAULT_PROXY, RENEW_BEFORE_MS } from '../protocol.js'
 
 export function dataDir (name = 'dotrino-remote-agent') {
   if (process.env.DOTRINO_REMOTE_AGENT_DIR) return process.env.DOTRINO_REMOTE_AGENT_DIR
@@ -113,7 +114,7 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) throw new Error('invalid link: device/cert/iss required')
   installNodeGlobals(dir)
   const device = link.device
-  const proxy = link.proxy || 'wss://proxy.dotrino.com'
+  const proxy = link.proxy || DEFAULT_PROXY
   return {
     me: { publickey: device.publickey },
     async signData (data) {
@@ -146,8 +147,43 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
   }
 }
 
-/** Con menos de esto de vida se pide cert nuevo (7 días; el cert dura 30). */
-export const RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000
+// Se reexporta por compatibilidad del subpath '/link'; la definición vive en protocol.js.
+export { RENEW_BEFORE_MS }
+
+/**
+ * POR QUÉ TOCA PEDIR PAPEL NUEVO, o `null` si no toca. Es la única regla de renovación:
+ * la usan `renewLink` (agentes que corren una vez) y el tic de `startRemoteAgent`.
+ *   · `'legacy'`: el papel es del MODELO VIEJO (lleva `exp` y no `seq`). Se cambia sí o sí:
+ *     se acepta por el repliegue de migración, pero muere en su fecha y con él la máquina.
+ *   · `'behind'`: el acta que hemos visto va por delante del papel (el dueño cambió permisos).
+ * Nunca por calendario: el papel no vence.
+ *
+ * @param {object} link
+ * @returns {'legacy'|'behind'|null}
+ */
+export function renewalReason (link) {
+  if (typeof link?.cert?.seq !== 'number') return 'legacy'
+  if (typeof link.actaSeq === 'number' && link.actaSeq > link.cert.seq) return 'behind'
+  return null
+}
+
+/**
+ * GUARDA un papel renovado (ya comprobado por quien lo pidió) y lo persiste. SE GUARDA ANTES
+ * DE DAR NADA POR BUENO: emitir un papel RETIRA el anterior, así que si esto no se persiste la
+ * máquina se queda usando uno revocado y fuera para siempre.
+ *
+ * El acta que viaja con el papel se adopta SOLO si se puede comprobar (`record.js`): es la que
+ * decide quién abre sesión con este agente. El papel sí se guarda siempre.
+ */
+export async function storeRenewedCert ({ dir, link, cert, acta }) {
+  link.cert = cert
+  link.actaSeq = acta.seq
+  if ((await adoptRecord({ link, candidate: acta, me: link.device.publickey })).adopt) {
+    link.acta = acta
+    link.actaTrusted = true
+  }
+  saveLink(dir, link)
+}
 
 /**
  * RENUEVA el cert del enlace si vence pronto y lo persiste. Es lo que hace el agente
@@ -167,31 +203,22 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
   // EL PAPEL DEL MODELO VIEJO SE CAMBIA SÍ O SÍ. Lleva `exp` y no `seq`; se acepta por el
   // repliegue de migración pero muere en su fecha, y con él la máquina. Los demás se
   // renuevan cuando el acta va por delante — nunca por calendario, que el papel no vence.
-  const legacy = typeof link.cert.seq !== 'number'
-  if (legacy && typeof link.cert.exp === 'number' && link.cert.exp <= Date.now()) {
+  const why = renewalReason(link)
+  if (why === 'legacy' && typeof link.cert.exp === 'number' && link.cert.exp <= Date.now()) {
     return { renewed: false, reason: 'expired: enroll again' }
   }
-  const behind = typeof link.actaSeq === 'number' && typeof link.cert.seq === 'number' && link.actaSeq > link.cert.seq
-  if (!force && !legacy && !behind) return { renewed: false, seq: link.cert.seq, reason: 'not due' }
+  if (!force && !why) return { renewed: false, seq: link.cert.seq, reason: 'not due' }
   installNodeGlobals(dir)
   try {
     // `requestRenew` ya JUZGA lo que devuelve (`checkVaultReply` del pilar: acta bien
     // firmada, esta bóveda puede sellarla, el papel lo firmó ella y es para esta llave) y
     // lanza si no cuadra. Aquí se comparaba `acta.profileId` con `link.iss`, que solo vale
     // en una cuenta que nació en esa bóveda: con una segunda bóveda no renovaba nunca.
-    const { cert, acta } = await requestRenew({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
+    const { cert, acta } = await requestRenew({ master: link.iss, proxy: link.proxy || DEFAULT_PROXY, device: link.device, cert: link.cert })
     // SE GUARDA ANTES DE DAR NADA POR BUENO. Emitir un papel RETIRA el anterior, así que si
     // esto no se persiste la máquina se queda usando uno revocado y fuera para siempre. Le
     // pasó al registro de selladores en la migración, y por eso está dicho aquí.
-    link.cert = cert
-    link.actaSeq = acta.seq
-    // El acta que viaja con el papel se guarda SOLO si se puede comprobar (`record.js`): es
-    // la que decide quién abre sesión con este agente. El papel sí se guarda siempre.
-    if ((await adoptRecord({ link, candidate: acta, me: link.device.publickey })).adopt) {
-      link.acta = acta
-      link.actaTrusted = true
-    }
-    saveLink(dir, link)
+    await storeRenewedCert({ dir, link, cert, acta })
     return { renewed: true, seq: cert.seq }
   } catch (e) {
     return { renewed: false, seq: link.cert.seq ?? null, reason: e.message }
@@ -211,7 +238,7 @@ export async function refreshChain (link, { dir = dataDir() } = {}) {
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) return { ok: false, reason: 'invalid link' }
   installNodeGlobals(dir)
   try {
-    const res = await requestDevices({ master: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com', device: link.device, cert: link.cert })
+    const res = await requestDevices({ master: link.iss, proxy: link.proxy || DEFAULT_PROXY, device: link.device, cert: link.cert })
     const chain = res.sealerChain
     if (!Array.isArray(chain) || !chain.length) return { ok: false, reason: 'the vault sent no sealer chain (vaultd < 0.154.0?)' }
     const expected = link.sealerChain?.[0]?.profileId ?? link.acta?.profileId ?? null
@@ -232,7 +259,7 @@ export async function refreshChain (link, { dir = dataDir() } = {}) {
 
 /** El enlace como lo esperan `ContentClient.connect({ link })` y `RemoteAgentClient`. */
 export function clientLink (link, opts) {
-  return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || 'wss://proxy.dotrino.com' }
+  return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || DEFAULT_PROXY }
 }
 
-export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink, renewLink, refreshChain }
+export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink, renewLink, renewalReason, storeRenewedCert, refreshChain }

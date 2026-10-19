@@ -23,7 +23,7 @@
 import { verifyChain } from '@dotrino/identity/capabilities'
 import { sealersOf } from '@dotrino/identity/acta'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
-import { HS, ACK, DATA, PING, PONG, ERROR } from '../protocol.js'
+import { HS, ACK, DATA, PING, PONG, ERROR, DEFAULT_PROXY } from '../protocol.js'
 
 export class RemoteAgentClient {
   /**
@@ -37,7 +37,7 @@ export class RemoteAgentClient {
   constructor (link, { agentPubkey, proxyUrl } = {}) {
     this.link = link                                  // { id, cert, iss, proxy, mode? }
     this.agentPubkey = agentPubkey                    // pubkey del agente destino
-    this.proxyUrl = proxyUrl || link.proxy || 'wss://proxy.dotrino.com'
+    this.proxyUrl = proxyUrl || link.proxy || DEFAULT_PROXY
     this.client = null
     this.key = null
     this.sid = null

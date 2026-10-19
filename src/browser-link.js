@@ -1,3 +1,5 @@
+import { DEFAULT_PROXY } from '../protocol.js'
+
 /**
  * El enlace de un NAVEGADOR a su bóveda, sacado del pilar de identidad (iframe
  * id.dotrino.com): es lo que necesita `RemoteAgentClient` para hablar con un agente.
@@ -23,7 +25,7 @@ export async function linkFromIdentity (id) {
     id,
     cert: v.cert,
     iss: status.master,
-    proxy: status.proxy || 'wss://proxy.dotrino.com',
+    proxy: status.proxy || DEFAULT_PROXY,
     deviceId: status.deviceId,
     scope: status.scope || []
   }

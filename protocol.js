@@ -33,6 +33,9 @@ export const VMSG = {
   ERROR: 'vault.error'
 }
 
+/** El proxio por defecto, cuando el enlace no trae uno. Única definición del paquete. */
+export const DEFAULT_PROXY = 'wss://proxy.dotrino.com'
+
 /** Scope del cert de dispositivo que autoriza a hablar con el agente. */
 export const SIGN_SCOPE = 'vault:sign'
 
