@@ -63,7 +63,7 @@ export class RemoteAgentClient {
    * guarda: es la política vigente del perfil, no cambia a mitad de una sesión.
    *
    * Si no se puede traer, se devuelve `null` a propósito y `verifyChain` corta con
-   * `no-acta`. No hay repliegue: sin acta no hay con qué decidir, y no decidir es que no.
+   * `no-record`. No hay repliegue: sin acta no hay con qué decidir, y no decidir es que no.
    */
   async _acta () {
     if (this._actaCache !== undefined) return this._actaCache
@@ -195,10 +195,10 @@ export class RemoteAgentClient {
     //
     // CON EL ACTA, o no se juzga. Desde que el papel no vence, `verifyChain` necesita el
     // `seq` del acta y su lista de SELLADORAS: sin eso no puede decir si quien firmó el
-    // papel del agente podía hacerlo, y contesta `no-acta` — que es lo correcto, porque
+    // papel del agente podía hacerlo, y contesta `no-record` — que es lo correcto, porque
     // decir «vale» sin haber comprobado nada es como entraba un papel viejo. Aquí no se le
     // pasaba: el lado del agente sí lo hacía (`contextoActa`) y este lado se quedó atrás,
-    // así que TODA sesión moría con «el agente no está certificado por tu vault: no-acta».
+    // así que TODA sesión moría con «el agente no está certificado por tu vault: no-record».
     // `clientLink` no trae el acta, así que se le pide a la bóveda una vez y se guarda.
     const acta = await this._acta()
     const chk = await verifyChain({

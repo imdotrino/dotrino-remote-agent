@@ -54,10 +54,10 @@ test('sin label: todos los que tienen nombre menos los navegadores (`cli`)', asy
 
 test('sin acta no se sabe: se dice, no se contesta «ninguno»', async () => {
   const id = { me: { publickey: ME }, listVaultDevices: async () => ({ devices: [] }), profileActa: async () => null }
-  await assert.rejects(listAgentsByLabel(id, 'content'), { code: 'no-acta' })
+  await assert.rejects(listAgentsByLabel(id, 'content'), { code: 'no-record' })
   // Y el motivo de la bóveda viaja en el mensaje: es lo que hay que arreglar.
   const mute = { me: { publickey: ME }, listVaultDevices: async () => { throw new Error('the vault did not answer') }, profileActa: async () => null }
-  await assert.rejects(listAgentsByLabel(mute, 'content'), (e) => e.code === 'no-acta' && /the vault did not answer/.test(e.message))
+  await assert.rejects(listAgentsByLabel(mute, 'content'), (e) => e.code === 'no-record' && /the vault did not answer/.test(e.message))
 })
 
 test('si la bóveda no contesta, se usa el acta que ya se tiene guardada', async () => {

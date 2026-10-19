@@ -29,7 +29,7 @@ import { PING, PONG } from '../protocol.js'
  *   `'ia-agent'`). Omitir = todos los que tengan nameOf y no sean `'cli'` (un navegador
  *   enrolado queda como `cli` y no atiende a nadie).
  * @returns {Promise<Array<{sub:string,label:string,cn:string|null}>>} uno por miembro.
- * @throws `code: 'no-acta'` si ni la bóveda ni lo guardado dan el acta: no se sabe, y no es «ninguno».
+ * @throws `code: 'no-record'` si ni la bóveda ni lo guardado dan el acta: no se sabe, y no es «ninguno».
  */
 export async function listAgentsByLabel (id, label) {
   // Por su efecto: trae el acta vigente y la adopta. La lista de aparatos que devuelva —si
@@ -43,7 +43,7 @@ export async function listAgentsByLabel (id, label) {
   // vacía aquí hacía que una máquina con la bóveda inalcanzable dijera «no tienes otras
   // máquinas» con toda tranquilidad. Se para y se dice.
   if (!acta) {
-    throw Object.assign(new Error(`could not get the account record (acta) from the vault${why ? `: ${why.message}` : ''}`), { code: 'no-acta', cause: why || undefined })
+    throw Object.assign(new Error(`could not get the account record (acta) from the vault${why ? `: ${why.message}` : ''}`), { code: 'no-record', cause: why || undefined })
   }
 
   const mine = id.me?.publickey
