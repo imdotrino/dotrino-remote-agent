@@ -142,9 +142,30 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
       // actual de un salto («sin-acta-previa»), de modo que la cadena no iba a usarse jamás.
       // Costó tenerlo así: la respuesta llegó a 1,03 MB, el proxio corta el frame a 1 MB y
       // la bóveda se quedaba muda para todo el ecosistema (2026-08-24).
-      return requestDevices({ master: link.iss, proxy, device, cert: link.cert })
+      const res = await requestDevices({ master: link.iss, proxy, device, cert: link.cert })
+      // EL ACTA QUE SE DEVUELVE ES UNA COMPROBADA, nunca la que llegó por la red: la respuesta
+      // no trae remitente comprobable, y con ella se decide quién es de la cuenta (a quién
+      // se le abre una consola). Vale la que encadena desde la de confianza del enlace (o la
+      // sella la bóveda con la que se enroló, `adoptRecord`); si no, la de confianza que ya había.
+      return { ...res, acta: await checkedActa(link, res.acta, device.publickey) }
+    },
+    /** El acta de confianza del enlace (la que guardó el agente al comprobarla), o `null`. */
+    async profileActa () {
+      const acta = trustedActaOf(link)
+      return acta ? { acta } : null
     }
   }
+}
+
+const trustedActaOf = (link) => (link?.actaTrusted === true && link.acta ? link.acta : null)
+
+/** El acta que `listVaultDevices` puede dar por buena. Exportada para las pruebas. */
+export async function checkedActa (link, candidate, me) {
+  if (candidate && typeof candidate.seq === 'number') {
+    const r = await adoptRecord({ link, candidate, me })
+    if (r.adopt) return candidate
+  }
+  return trustedActaOf(link)
 }
 
 // Se reexporta por compatibilidad del subpath '/link'; la definición vive en protocol.js.

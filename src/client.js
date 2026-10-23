@@ -21,8 +21,9 @@
  * `on('message', cb)` recibe los payloads del agente, ya descifrados.
  */
 import { verifyChain } from '@dotrino/identity/capabilities'
-import { sealersOf } from '@dotrino/identity/acta'
+import { sealersOf, samePubkey } from '@dotrino/identity/acta'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
+import { canGreet } from './membership.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, DEFAULT_PROXY } from '../protocol.js'
 
 export class RemoteAgentClient {
@@ -59,19 +60,22 @@ export class RemoteAgentClient {
   _emit (ev, ...args) { for (const h of (this._h[ev] || [])) { try { h(...args) } catch (_) {} } }
 
   /**
-   * El acta con la que se juzga el papel del agente. Se pide UNA vez por cliente y se
-   * guarda: es la política vigente del perfil, no cambia a mitad de una sesión.
+   * El acta con la que se juzga al agente. Se pide EN CADA SALUDO, no una vez por cliente:
+   * una pestaña vive días, y volver a saludar a una máquina que el dueño quitó entretanto
+   * tiene que fallar. `listVaultDevices` devuelve el acta ya COMPROBADA (la adoptada, no la
+   * que llegó por la red: identity ≥ 0.126.2, y `identityFromLink` en Node).
    *
-   * Si no se puede traer, se devuelve `null` a propósito y `verifyChain` corta con
-   * `no-record`. No hay repliegue: sin acta no hay con qué decidir, y no decidir es que no.
+   * Si la bóveda no contesta vale la que este aparato ya adoptó (`profileActa`): está
+   * comprobada, igual que la que guarda el agente. Es lo mismo que hace `listAgentsByLabel`.
+   * Si no hay ninguna, `null` y se corta con `no-record`: sin acta no hay con qué decidir, y
+   * no decidir es que no.
    */
   async _acta () {
-    if (this._actaCache !== undefined) return this._actaCache
-    let acta = this.link.acta || null
-    if (!acta) {
-      try { acta = (await this.link.id?.listVaultDevices?.())?.acta || null } catch (_) { acta = null }
-    }
-    this._actaCache = acta
+    if (this.link.acta) return this.link.acta
+    const id = this.link.id
+    let acta = null
+    try { acta = (await id?.listVaultDevices?.())?.acta || null } catch (_) {}
+    if (!acta) { try { acta = (await id?.profileActa?.())?.acta || null } catch (_) {} }
     return acta
   }
 
@@ -202,11 +206,22 @@ export class RemoteAgentClient {
     // `clientLink` no trae el acta, así que se le pide a la bóveda una vez y se guarda.
     const acta = await this._acta()
     const chk = await verifyChain({
-      data: res.ack, signature: res.signature, cert: res.cert, trustedIssuer: this.link.iss,
+      data: res.ack, signature: res.signature, cert: res.cert,
       actaSeq: acta?.seq ?? null, sealers: acta ? sealersOf(acta) : null
     })
-    if (!chk.ok) throw new Error('the agent is not certified by your vault: ' + chk.reason)
-    if (res.ack.machine !== this.agentPubkey) throw new Error('the ack came from another agent')
+    if (!chk.ok) throw Object.assign(new Error('the agent is not certified by your vault: ' + chk.reason), { code: 'unauthorized', reason: chk.reason })
+    // QUIEN FIRMA ES LA MÁQUINA QUE SE PIDIÓ. `machine` es un campo más del ack: lo que prueba
+    // quién contesta es la llave que firma (`publickey`, la que `verifyChain` comprobó).
+    // Mirar solo `machine` dejaba a cualquier llave con papel de la cuenta hacerse pasar por
+    // otra máquina, con un relevo que le pasara el saludo.
+    if (!samePubkey(chk.device, this.agentPubkey) || !samePubkey(res.ack.machine, this.agentPubkey)) {
+      throw Object.assign(new Error('the ack came from another agent'), { code: 'unauthorized', reason: 'wrong-agent' })
+    }
+    // Y ESA MÁQUINA SIGUE EN EL ACTA. El papel no caduca: el de una máquina quitada (robada)
+    // sigue bien firmado. La misma regla que aplica el agente a quien le saluda.
+    if (!canGreet(acta, this.agentPubkey)) {
+      throw Object.assign(new Error('that machine is no longer in your account'), { code: 'unauthorized', reason: 'not-in-record' })
+    }
     if (res.ack.ceph !== eph.pub || res.ack.sid !== res.sid) throw new Error('the ack does not match this handshake')
 
     this.sid = res.sid

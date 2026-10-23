@@ -24,6 +24,7 @@ import path from 'node:path'
 import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId, keyLabel } from '@dotrino/identity/capabilities'
 import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
 import { adoptRecord } from './record.js'
+import { canGreet } from './membership.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { makeCatchUp } from './catch-up.js'
@@ -215,6 +216,7 @@ export async function startRemoteAgent (opts = {}) {
       // El acta viaja con la lista. Apuntar su `seq` es lo que dispara la renovación en el
       // mismo tic si el dueño nos cambió los permisos.
       await recordActa(res.acta)
+      evictOutsiders()
     } catch (e) {
       if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
     }
@@ -299,19 +301,40 @@ export async function startRemoteAgent (opts = {}) {
    * que ya se dio por buena, o venir firmada por la bóveda con la que se enroló.
    */
   async function recordActa (acta) {
-    if (typeof acta?.seq !== 'number') return
+    if (typeof acta?.seq !== 'number') return false
     const r = await adoptRecord({ link, candidate: acta, me: myPub })
     if (!r.adopt) {
       if (r.reason !== 'same-record') {
         audit('record-rejected', { seq: acta.seq, reason: r.reason })
         if (!opts.quiet) console.error(`[remote-agent] record #${acta.seq} rejected (${r.reason}); keeping the one already trusted`)
       }
-      return
+      return false
     }
     link.acta = acta
     link.actaSeq = acta.seq
     link.actaTrusted = true
     try { saveLink(dir, link) } catch (_) {}
+    evictOutsiders()
+    return true
+  }
+
+  /**
+   * CIERRA LAS SESIONES DE QUIEN YA NO PUEDE ESTAR: el acta de confianza ya no lo nombra (o
+   * le quitó `sign`), o su papel se retiró. Se juzgaba solo al saludar, así que un aparato
+   * quitado del acta conservaba su consola mientras siguiera escribiendo (cada mensaje
+   * renueva la sesión). Se le avisa con el mismo error que recibiría al saludar.
+   */
+  function evictOutsiders () {
+    const acta = trustedActa()
+    for (const [sid, s] of sessions) {
+      const reason = !canGreet(acta, s.device) ? 'not-in-record'
+        : (s._certNonce && revokedSet.has(s._certNonce)) ? 'revoked' : null
+      if (!reason) continue
+      send(s.from, { type: ERROR, code: 'unauthorized', reason, sid, error: 'unauthorized: ' + reason })
+      s.close(); sessions.delete(sid)
+      audit('session-evicted', { sid: sid.slice(0, 8), reason })
+      if (!opts.quiet) console.log(`[remote-agent] session ${sid.slice(0, 8)} closed: ${reason}`)
+    }
   }
 
   /**
@@ -360,10 +383,7 @@ export async function startRemoteAgent (opts = {}) {
       return { chk }
     }
     let verdict = await judge()
-    const known = (v) => {
-      const acta = trustedActa()
-      return !!acta && (acta.members || []).some((m) => m?.pub === v.chk.device) && memberCan(acta, v.chk.device, 'sign')
-    }
+    const known = (v) => canGreet(trustedActa(), v.chk.device)
     if ((verdict.error || !known(verdict)) && await catchUp()) verdict = await judge()
     if (verdict.error) return send(from, { type: ERROR, code: verdict.code, reason: verdict.reason, error: verdict.error })
     const chk = verdict.chk
@@ -381,9 +401,7 @@ export async function startRemoteAgent (opts = {}) {
     // abrir sesión con otro agente. El bot social se pasó así el 1 de septiembre, con un
     // node de contenido encendido a su lado que le contestaba «ese aparato no firma por este
     // perfil». Se le pide lo que corresponde: que el acta lo nombre y le reconozca `sign`.
-    const acta = trustedActa()
-    const isMember = (acta?.members || []).some((m) => m?.pub === chk.device)
-    if (!acta || !isMember || !memberCan(acta, chk.device, 'sign')) {
+    if (!canGreet(trustedActa(), chk.device)) {
       return send(from, { type: ERROR, code: 'unauthorized', reason: 'not-in-record', error: 'unauthorized: not-in-record' })
     }
     // BLOQUEADO por un aprobador: está en el acta y su papel vale, y aun así no entra. Se le
@@ -406,6 +424,8 @@ export async function startRemoteAgent (opts = {}) {
 
     const session = new AgentSession({ sid, key, from, device: chk.device, send, isDirect: typeof client.isWebRTCOpen === 'function' ? (t) => client.isWebRTCOpen(t) : null })
     session._exp = Date.now() + SESSION_TTL_MS
+    // El papel con que entró: si después se retira (`revoked`), la sesión se cierra.
+    session._certNonce = cert.nonce || null
     sessions.set(sid, session)
     audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
     send(from, { type: ACK, sid, ack, signature: ackSig, cert: link.cert })
@@ -475,6 +495,20 @@ export async function startRemoteAgent (opts = {}) {
     if (opts.onRevoked) { try { opts.onRevoked() } catch (_) {} }
   }
 
+  /**
+   * LA BÓVEDA AVISA DE QUE EL PERFIL CAMBIÓ (`vault.admin.event`, con el acta nueva). El aviso
+   * no se cree: el acta que trae solo se adopta si encadena desde la de confianza
+   * (`recordActa`), y si no encadena (faltan eslabones) se trae de la bóveda, con freno. Así
+   * quitar un aparato le cierra la consola en el acto, sin esperar al tic de cinco minutos.
+   * Un bloqueo no cambia el acta: va en la lista, que sí se pide.
+   */
+  async function onAdminEvent (payload) {
+    const ev = payload.body?.ev
+    if (ev === 'blocked' || ev === 'unblocked') return refreshRevocations()
+    if (payload.acta && await recordActa(payload.acta)) return
+    if (typeof payload.acta?.seq === 'number' && payload.acta.seq > (link.actaSeq ?? -1)) await catchUp()
+  }
+
   client.on('message', (from, payload) => {
     if (!payload || typeof payload !== 'object') return
     if (payload.type === HS) handleHandshake(from, payload).catch((e) => send(from, { type: ERROR, error: e.message }))
@@ -488,7 +522,7 @@ export async function startRemoteAgent (opts = {}) {
     // Un aviso de bloqueo o desbloqueo (`vault.admin.event`) no se cree: dispara traer la
     // lista de la bóveda, que sí va firmada. Así el bloqueo cierra la sesión en el acto, en
     // vez de esperar al tic de cinco minutos.
-    else if (payload.type === 'vault.admin.event' && (payload.body?.ev === 'blocked' || payload.body?.ev === 'unblocked')) refreshRevocations().catch(() => {})
+    else if (payload.type === 'vault.admin.event') onAdminEvent(payload).catch(() => {})
   })
 
   /**

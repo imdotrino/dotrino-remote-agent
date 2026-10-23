@@ -183,8 +183,17 @@ extraerlo luego a este paquete.
 
 ## Seguridad
 
-- **Autorización = estar vinculado al vault.** El agente solo atiende dispositivos
-  cuya cadena certifica la maestra pineada (`verifyChain` con `trustedIssuer`).
+- **Autorización = el ACTA, en las dos puntas** (0.24.0). El papel (`cert`) prueba quién
+  lo emitió —una selladora del acta— pero no caduca, así que el de un aparato quitado sigue
+  bien firmado. Lo que decide es `canGreet(acta, pub)` (`src/membership.js`): el acta
+  vigente lo nombra y le da `sign`.
+  - El **agente** lo exige a quien saluda, y **cierra la sesión abierta** de quien sale del
+    acta en cuanto se entera (el aviso `vault.admin.event` de la bóveda trae el acta, que
+    solo se adopta si encadena), con `ra.error` `unauthorized` / `not-in-record` o `revoked`.
+  - El **cliente** lo exige a la máquina: quien firma el ack tiene que ser la pedida
+    (`wrong-agent`), y seguir en el acta (`not-in-record`). El acta se pide en cada saludo.
+  - El acta que devuelve `listVaultDevices` es una **comprobada** (identity ≥ 0.126.2 en el
+    navegador; `identityFromLink` en Node), nunca la que llegó por la red.
 - **Emparejamiento con código SAS** que no viaja (anti aprobación a ciegas / vault impostor).
 - **Anti-replay** en el handshake (`ts` ±5 min).
 - **Auto-borrado** del `link.json` al recibir un `revoke` firmado por la maestra.
