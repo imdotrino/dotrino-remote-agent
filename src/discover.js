@@ -48,9 +48,14 @@ export async function listAgentsByLabel (id, label) {
 
   const mine = id.me?.publickey
   const nameOf = (m) => m.cn || m.label || null
+  // LAS BÓVEDAS NO SON AGENTES: su llave de comunicación (`cn: 'vault'`), la que sella
+  // (`sealer`) y la réplica (`replica`). Preguntarles qué agente son no sirve de nada, y a una
+  // bóveda que duerme (la de Lambda) el sondeo de Terminal cada 30 s la tenía despierta
+  // (2026-10-25). Quien busca una bóveda por su nombre (`label`) la sigue encontrando.
+  const isVault = (m) => m.cn === 'vault' || (Array.isArray(m.caps) && (m.caps.includes('sealer') || m.caps.includes('replica')))
   return (acta.members || [])
     .filter((m) => m?.pub && m.pub !== mine)
-    .filter((m) => (label ? nameOf(m) === label : (nameOf(m) && nameOf(m) !== 'cli')))
+    .filter((m) => (label ? nameOf(m) === label : (nameOf(m) && nameOf(m) !== 'cli' && !isVault(m))))
     .map((m) => ({ sub: m.pub, label: m.label || m.cn || '', cn: m.cn || null }))
 }
 

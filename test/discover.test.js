@@ -52,6 +52,25 @@ test('sin label: todos los que tienen nombre menos los navegadores (`cli`)', asy
   assert.deepEqual(found.map((a) => a.sub).sort(), [NODE, PHONE].sort())
 })
 
+test('sin label: las bóvedas no salen, porque no son agentes (2026-10-25)', async () => {
+  const VAULT_COMM = '{"kty":"EC","x":"comm"}'
+  const MASTER = '{"kty":"EC","x":"maestra"}'
+  const REPLICA = '{"kty":"EC","x":"replica"}'
+  const conBovedas = {
+    seq: 10,
+    members: [
+      ...acta.members,
+      { pub: VAULT_COMM, label: 'esta bóveda', cn: 'vault', caps: ['sign'] },
+      { pub: MASTER, label: 'PC', cn: null, caps: ['sign', 'read', 'store', 'sealer'] },
+      { pub: REPLICA, label: 'réplica', cn: null, caps: ['replica'] }
+    ]
+  }
+  const subs = (await listAgentsByLabel(fakeIdentity({ acta: conBovedas }))).map((x) => x.sub)
+  assert.deepEqual(subs.sort(), [NODE, PHONE].sort())
+  // Pedida por su nombre, una bóveda se sigue encontrando.
+  assert.deepEqual((await listAgentsByLabel(fakeIdentity({ acta: conBovedas }), 'vault')).map((x) => x.sub), [VAULT_COMM])
+})
+
 test('sin acta no se sabe: se dice, no se contesta «ninguno»', async () => {
   const id = { me: { publickey: ME }, listVaultDevices: async () => ({ devices: [] }), profileActa: async () => null }
   await assert.rejects(listAgentsByLabel(id, 'content'), { code: 'no-record' })
