@@ -28,15 +28,23 @@ import { PING, PONG } from '../protocol.js'
  * @param {string} [label]  filtrar por servicio/label exacto (p. ej. `'content'`,
  *   `'ia-agent'`). Omitir = todos los que tengan nameOf y no sean `'cli'` (un navegador
  *   enrolado queda como `cli` y no atiende a nadie).
+ * @param {{ fresh?: boolean }} [opts]  `fresh: false`: el acta guardada, sin preguntar a la
+ *   bóveda (si no hay ninguna guardada, se pregunta igual).
  * @returns {Promise<Array<{sub:string,label:string,cn:string|null}>>} uno por miembro.
  * @throws `code: 'no-record'` si ni la bóveda ni lo guardado dan el acta: no se sabe, y no es «ninguno».
  */
-export async function listAgentsByLabel (id, label) {
+export async function listAgentsByLabel (id, label, { fresh = true } = {}) {
   // Por su efecto: trae el acta vigente y la adopta. La lista de aparatos que devuelva —si
   // devuelve alguna— no se mira: quién es de la cuenta lo dice el acta.
+  //
+  // `fresh: false` lee primero el acta YA GUARDADA, sin preguntar a la bóveda. Es para quien
+  // vuelve a mirar cada pocos segundos: el panel de máquinas del agente lo hacía cada 30 s, y
+  // cada vez era un `vault.devices` a la cuenta que despertaba a la bóveda de Lambda y no la
+  // dejaba dormirse (2026-10-25). El agente ya refresca su acta solo (`REVOKE_REFRESH_MS`).
   let acta = null
   let why = null
-  try { acta = (await id.listVaultDevices())?.acta || null } catch (e) { why = e }
+  if (!fresh) acta = (await id.profileActa?.().catch(() => null))?.acta || null
+  if (!acta) { try { acta = (await id.listVaultDevices())?.acta || null } catch (e) { why = e } }
   // La bóveda no contestó: vale el acta que ya se tiene guardada.
   if (!acta) acta = (await id.profileActa?.().catch((e) => { why = why || e; return null }))?.acta || null
   // SIN ACTA NO SE SABE quién es de la cuenta, y eso no es «no hay nadie». Devolver una lista

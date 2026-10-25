@@ -71,6 +71,17 @@ test('sin label: las bóvedas no salen, porque no son agentes (2026-10-25)', asy
   assert.deepEqual((await listAgentsByLabel(fakeIdentity({ acta: conBovedas }), 'vault')).map((x) => x.sub), [VAULT_COMM])
 })
 
+test('fresh:false usa el acta guardada y no le pregunta a la bóveda', async () => {
+  let asked = 0
+  const id = { me: { publickey: ME }, listVaultDevices: async () => { asked++; return { acta } }, profileActa: async () => ({ acta }) }
+  assert.deepEqual((await listAgentsByLabel(id, 'content', { fresh: false })).map((x) => x.sub), [NODE])
+  assert.equal(asked, 0)
+  // Sin nada guardado, pregunta igual: «no lo tengo» no es «no hay nadie».
+  const empty = { me: { publickey: ME }, listVaultDevices: async () => { asked++; return { acta } }, profileActa: async () => ({ acta: null }) }
+  assert.deepEqual((await listAgentsByLabel(empty, 'content', { fresh: false })).map((x) => x.sub), [NODE])
+  assert.equal(asked, 1)
+})
+
 test('sin acta no se sabe: se dice, no se contesta «ninguno»', async () => {
   const id = { me: { publickey: ME }, listVaultDevices: async () => ({ devices: [] }), profileActa: async () => null }
   await assert.rejects(listAgentsByLabel(id, 'content'), { code: 'no-record' })
