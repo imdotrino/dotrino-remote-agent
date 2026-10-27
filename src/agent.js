@@ -30,6 +30,10 @@ import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { makeCatchUp } from './catch-up.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SESSION_GONE_MS, REVOKE_REFRESH_MS, DEFAULT_PROXY } from '../protocol.js'
 import { loadLink, saveLink, dataDir, renewalReason, storeRenewedCert } from './link.js'
+import { declare } from '@dotrino/compat'
+import { VAULT_PROTOCOL, VAULT_SPEAKS } from '@dotrino/vault/protocol'
+
+const PKG_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
 export class AgentSession {
@@ -119,6 +123,10 @@ export class AgentSession {
  * @param {number} [opts.sessionGoneMs]  cuánto se espera a un cliente cuya conexión se fue (`SESSION_GONE_MS`).
  * @param {number} [opts.netLogMs]    cada cuánto van al log las estadísticas de red (5 min).
  * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
+ * @param {string} [opts.product]     qué producto es (`accounts`, `terminal-agent`…), para el anuncio a la bóveda.
+ * @param {string} [opts.version]     su versión. Sin `product`/`version` se anuncia como `remote-agent`.
+ * @param {string[]} [opts.needs]     los permisos del acta que necesita, además de `sign`, que lo
+ *   añade este pilar: sin él no se abre ninguna sesión (`@dotrino/compat` ≥ 0.5.0).
  *
  * Devuelve además el **`client`** (el `WebSocketProxyClient` ya conectado e
  * identificado bajo la pubkey de esta máquina). Se expone a propósito: un agente
@@ -133,6 +141,10 @@ export async function startRemoteAgent (opts = {}) {
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) {
     throw new Error('this machine is not linked: enroll your agent first')
   }
+  const MY_DECL = declare({
+    product: opts.product || 'remote-agent', version: opts.version || PKG_VERSION,
+    protocol: VAULT_PROTOCOL, speaks: VAULT_SPEAKS, needs: ['sign', ...(opts.needs || [])]
+  })
   const master = link.iss
   const myPub = link.device.publickey
   const myId = await keyLabel(myPub)
@@ -184,7 +196,11 @@ export async function startRemoteAgent (opts = {}) {
    * mismo sobre para todo (`data` firmado con la D + el cert de esta máquina): lo
    * comparten el refresco de revocaciones y la renovación del cert.
    */
-  async function vaultRpc (sendType, okType, data, timeoutMs = 15000) {
+  async function vaultRpc (sendType, okType, payload, timeoutMs = 15000) {
+    // QUÉ SOY Y QUÉ NECESITO DEL ACTA, dentro de lo firmado: la bóveda lo apunta y enseña lo que
+    // falta en la fila de este aparato (dueño, 2026-10-27). `accounts` se pasó días sin `sign`,
+    // renovando un papel que no le servía, sin que ninguna pantalla lo dijera.
+    const data = { ...payload, v: MY_DECL }
     const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
     return new Promise((resolve, reject) => {
       // El temporizador se LIMPIA al contestar (y no retiene el bucle de eventos):

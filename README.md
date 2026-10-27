@@ -46,6 +46,10 @@ import { startRemoteAgent } from '@dotrino/remote-agent/agent'
 
 const ra = await startRemoteAgent({
   label: 'ia-agent',
+  // Qué es y qué necesita del acta (`@dotrino/compat` ≥ 0.5.0). Va firmado en lo que se le pide
+  // a la bóveda, y la bóveda enseña lo que falte en la fila de este aparato. `sign` lo pone el
+  // pilar: sin él no se abre ninguna sesión.
+  product: 'ia-agent', version: pkg.version, needs: ['store'],
   proxyUrl: 'wss://proxy.dotrino.com',   // opcional
   dir: '/home/yo/.local/share/dotrino-ia-agent', // opcional
   quiet: false,

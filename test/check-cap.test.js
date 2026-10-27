@@ -100,3 +100,28 @@ test('checkCap: sin acta de confianza no se sabe, y se dice (no-record)', async 
   agent.close()
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('lo que pide a la bóveda lleva, firmado, qué es y qué permisos del acta necesita (sign siempre)', async () => {
+  const v = await vault(); const b = bus()
+  const machine = await makeDeviceKey({ label: 'accounts' })
+  await v.admit(machine.publickey, ['sign'])
+  const link = { device: machine, cert: await v.cert(machine.publickey), acta: v.acta, actaSeq: v.acta.seq, actaTrusted: true, iss: v.iss, proxy: 'wss://bus.invalid', label: 'accounts', at: Date.now() }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ra-needs-'))
+  fs.writeFileSync(path.join(dir, 'link.json'), JSON.stringify(link))
+  const visto = []
+  const vaultEp = b.endpoint('tok-vault')
+  vaultEp.on('message', (from, p) => {
+    if (p?.type === VMSG.DEVICES) { visto.push(p.data); vaultEp.send(from, { type: VMSG.DEVICES_RESULT, devices: [], revoked: [], blocked: [], acta: v.acta }) }
+    else if (p?.type === VMSG.RENEW) vaultEp.send(from, { type: VMSG.ERROR, error: 'renew is not part of this test' })
+  })
+  await vaultEp.identifyAs({ publickey: v.iss })
+  const agent = await startRemoteAgent({ dir, quiet: true, client: b.endpoint('tok-agent'), product: 'accounts', version: '0.8.0', needs: ['secrets'] })
+  await v.caps(machine.publickey, ['sign', 'admin'])
+  await agent.checkCap(machine.publickey, 'admin')
+  agent.close()
+  const d = visto.at(-1)
+  assert.ok(d, 'le preguntó a la bóveda')
+  assert.equal(d.v.product, 'accounts')
+  assert.equal(d.v.version, '0.8.0')
+  assert.deepEqual(d.v.needs, ['secrets', 'sign'])
+})
