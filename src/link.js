@@ -16,11 +16,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { signWithDevice, pubkeyId } from '@dotrino/identity/capabilities'
+import { signWithDevice, pubkeyId, makeDeviceKey, makeDeviceEncKey } from '@dotrino/identity/capabilities'
 import { requestDevices, requestRenew } from '@dotrino/identity/vault/remote.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { adoptRecord } from './record.js'
-import { verifySealerChain } from '@dotrino/identity/acta'
+import { verifySealerChain, genesisActa, sealActa } from '@dotrino/identity/acta'
 import { DEFAULT_PROXY, RENEW_BEFORE_MS } from '../protocol.js'
 
 export function dataDir (name = 'dotrino-remote-agent') {
@@ -84,7 +84,7 @@ export function b64urlDecode (s) {
  *        que un humano lo TIPEE en la bóveda al aprobar (el código NO viaja de aquí).
  * @param {number} [args.timeoutMs=180000]
  */
-export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns = null, onChallenge, timeoutMs = 180000 } = {}) {
+export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns = null, onChallenge, timeoutMs = 180000, keep = null } = {}) {
   installNodeGlobals(dir)
   const { enrollWithVault } = await import('@dotrino/vault/service')
   const res = await enrollWithVault({
@@ -92,12 +92,51 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
     label,
     expectedScope: ns ? 'vault:secrets:' + ns : null,
     onCode: onChallenge,
-    approveTimeoutMs: timeoutMs
+    approveTimeoutMs: timeoutMs,
+    ...(keep ? { device: keep.device, enc: keep.enc || null } : {})
   })
+  // Conservar la llave era lo pedido: una bóveda vieja (`@dotrino/vault` < 0.115.0) ignora
+  // `device` y crea otra, y entonces la dirección que sale de la llave cambiaría sin avisar.
+  if (keep && res.device?.publickey !== keep.device.publickey) {
+    throw Object.assign(new Error('the vault library created a new key instead of keeping this one: install @dotrino/vault >= 0.115.0'), { code: 'key-not-kept' })
+  }
   const link = { device: res.device, enc: res.enc, cert: res.cert, iss: res.iss, proxy: res.proxy, label, ...(ns ? { ns } : {}), at: Date.now() }
   saveLink(dir, link)
   return link
 }
+
+/**
+ * UNA IDENTIDAD PROPIA, SIN BÓVEDA. El aparato cumple el rol cuando no hay pieza dedicada:
+ * crea sus llaves (firma y cifrado) y un acta de génesis autofirmada donde él es el único
+ * miembro. Es una cuenta de un solo aparato, igual que «este dispositivo es bóveda» en el
+ * navegador: `verifySignedFor` la acepta sin saber nada más, porque la raíz de toda cuenta
+ * es un acta autofirmada.
+ *
+ * El enlace queda `{ device, enc, label, self: true, sealerChain: [génesis], at }`, sin
+ * `cert` ni `iss`. Emparejarlo después con una bóveda (`enroll({ keep: link })`) mete ESTAS
+ * llaves en el acta de la cuenta: el aparato sigue siendo el mismo.
+ *
+ * @param {{ label?: string, dir?: string }} [args]
+ */
+export async function selfLink ({ label = 'remote-agent', dir = dataDir() } = {}) {
+  installNodeGlobals(dir)
+  const d = await makeDeviceKey({ label })
+  const e = await makeDeviceEncKey()
+  const genesis = await sealActa({
+    acta: genesisActa({ pub: d.publickey, encPub: e.encPublickey, label }),
+    privateJwk: d.privateJwk
+  })
+  const link = {
+    device: { publickey: d.publickey, privateJwk: d.privateJwk },
+    enc: { publickey: e.encPublickey, privateJwk: e.encPrivateJwk },
+    label, self: true, sealerChain: [genesis], at: Date.now()
+  }
+  saveLink(dir, link)
+  return link
+}
+
+/** ¿Es una identidad propia (sin bóveda)? */
+export const isSelfLink = (link) => link?.self === true
 
 /**
  * La IDENTIDAD de un agente a partir de su enlace: lo que un cliente del ecosistema
@@ -111,6 +150,7 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
  * @param {{ dir?: string }} [opts]  dir para los globals de Node (localStorage del proxy-client).
  */
 export function identityFromLink (link, { dir = dataDir() } = {}) {
+  if (isSelfLink(link)) return selfIdentity(link, dir)
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) throw new Error('invalid link: device/cert/iss required')
   installNodeGlobals(dir)
   const device = link.device
@@ -154,6 +194,31 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
       const acta = trustedActaOf(link)
       return acta ? { acta } : null
     }
+  }
+}
+
+/**
+ * La identidad de un enlace propio: firma con su llave y prueba con su génesis. Lo que
+ * pregunta a una bóveda no existe aquí, y se dice (`no-vault`) en vez de inventarse.
+ */
+function selfIdentity (link, dir) {
+  const chain = link.sealerChain
+  if (!link?.device?.privateJwk || !Array.isArray(chain) || chain.length !== 1) throw new Error('invalid self link: device and its genesis required')
+  installNodeGlobals(dir)
+  const device = link.device
+  const noVault = () => Promise.reject(Object.assign(new Error('this device has its own identity and is not paired with a vault'), { code: 'no-vault' }))
+  return {
+    me: { publickey: device.publickey },
+    async signData (data) {
+      const signed = await signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
+      return { ...signed, profileId: chain[0].profileId, chain }
+    },
+    getVaultCert: noVault,
+    async vaultStatus () {
+      return { paired: false, self: true, master: null, proxy: link.proxy || DEFAULT_PROXY, deviceId: await pubkeyId(device.publickey), seq: chain[0].seq }
+    },
+    listVaultDevices: noVault,
+    async profileActa () { return { acta: chain[0] } }
   }
 }
 
@@ -256,6 +321,8 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
  * @returns {Promise<{ ok: boolean, seq?: number, reason?: string }>}
  */
 export async function refreshChain (link, { dir = dataDir() } = {}) {
+  // Una identidad propia es su propia cadena: no hay a quién preguntar ni nada que caduque.
+  if (isSelfLink(link)) return { ok: true, seq: link.sealerChain?.[0]?.seq ?? 1, self: true }
   if (!link?.device?.privateJwk || !link?.cert || !link?.iss) return { ok: false, reason: 'invalid link' }
   installNodeGlobals(dir)
   try {
@@ -283,4 +350,4 @@ export function clientLink (link, opts) {
   return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || DEFAULT_PROXY }
 }
 
-export default { dataDir, loadLink, saveLink, parseQr, enroll, identityFromLink, clientLink, renewLink, renewalReason, storeRenewedCert, refreshChain }
+export default { dataDir, loadLink, saveLink, parseQr, enroll, selfLink, isSelfLink, identityFromLink, clientLink, renewLink, renewalReason, storeRenewedCert, refreshChain }

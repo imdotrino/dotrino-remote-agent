@@ -33,7 +33,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent` | isomórfico | `e2e` (`makeEphemeral`/`deriveKey`/`seal`/`open`) + constantes de protocolo |
 | `@dotrino/remote-agent/agent` | Node | `startRemoteAgent(opts)` |
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
-| `@dotrino/remote-agent/link` | Node | `enroll`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
+| `@dotrino/remote-agent/link` | Node | `enroll`, `selfLink`, `isSelfLink`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
 | `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
 
@@ -106,6 +106,18 @@ parámetros (`{ ns, proxyUrl: link.proxy, masterPubkey: link.iss, device, cert, 
 
 Un agente que corre UNA vez (un bot por cron) no tiene el tic de renovación de
 `startRemoteAgent`: que llame a `renewLink(link)` en cada corrida, o su cert muere a los 30 días.
+
+### Sin bóveda: identidad propia (`selfLink`)
+
+Un agente no tiene por qué exigir una bóveda. `selfLink({ label, dir })` crea las llaves
+del aparato (firma y cifrado) y un acta de génesis autofirmada donde él es el único
+miembro: una cuenta de un solo aparato, la misma forma que «este dispositivo es bóveda»
+en el navegador. `identityFromLink` la sirve igual (`signData` lleva la cadena `[génesis]`
+y `verifySignedFor` la acepta); lo que pregunta a una bóveda lanza `no-vault`.
+
+Para pasarlo después a una cuenta **con la misma llave**: `enroll({ qr, label, dir, keep:
+link })`. Necesita `@dotrino/vault` ≥ 0.115.0; con una más vieja se para con
+`key-not-kept` en vez de cambiar de llave en silencio.
 
 ### Dónde vive el enlace: `~/.dotrino/agent/<tipo>/<nombre>/` (el estándar)
 
