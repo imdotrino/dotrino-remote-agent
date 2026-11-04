@@ -34,9 +34,14 @@ export class RemoteAgentClient {
    * @param {object} opts
    * @param {string} opts.agentPubkey dirección (pubkey) del agente destino.
    * @param {string} [opts.proxyUrl]  override del proxy del enlace.
+   * @param {() => object|null} [opts.trustedActa] un acta ya COMPROBADA y que alguien mantiene
+   *   al día (un agente de Node: la de su enlace, que refresca cada 5 min y con los avisos de la
+   *   bóveda). Con ella el saludo no espera a la bóveda; si no pasa, se le pregunta y se juzga
+   *   otra vez. Sin ella, la bóveda en cada saludo, como siempre.
    */
-  constructor (link, { agentPubkey, proxyUrl } = {}) {
+  constructor (link, { agentPubkey, proxyUrl, trustedActa = null } = {}) {
     this.link = link                                  // { id, cert, iss, proxy, mode? }
+    this.trustedActa = trustedActa
     this.agentPubkey = agentPubkey                    // pubkey del agente destino
     this.proxyUrl = proxyUrl || link.proxy || DEFAULT_PROXY
     this.client = null
@@ -193,6 +198,21 @@ export class RemoteAgentClient {
 
   /** Comprueba el ack y deja `sid` y `key`. */
   async _checkAck (res, eph) {
+    // PRIMERO EL ACTA QUE YA SE TIENE (`trustedActa`), y la bóveda solo si con esa no pasa.
+    // Preguntarle en cada saludo hacía esperar a la ventana 4-17 s antes de pedir la clave de
+    // otra máquina (2026-11-04): el ack llega en medio segundo, el acta tardaba el resto. Si
+    // no pasa puede ser que el acta guardada vaya atrás (una máquina recién emparejada): se
+    // pregunta a la bóveda y se juzga otra vez, una sola, como hace el agente con un saludo.
+    let local = null
+    try { local = this.trustedActa?.() || null } catch (_) {}
+    if (local) {
+      try { return await this._judgeAck(res, eph, local) } catch (e) { if (e.code !== 'unauthorized') throw e }
+    }
+    return this._judgeAck(res, eph, await this._acta())
+  }
+
+  /** Juzga el ack con `acta` y, si pasa, deja `sid` y `key`. */
+  async _judgeAck (res, eph, acta) {
 
     // El ack debe: (1) encadenar a NUESTRA maestra, (2) estar firmado por el agente
     // que apuntamos, (3) atar nuestra pub efímera y el sid.
@@ -203,8 +223,7 @@ export class RemoteAgentClient {
     // decir «vale» sin haber comprobado nada es como entraba un papel viejo. Aquí no se le
     // pasaba: el lado del agente sí lo hacía (`contextoActa`) y este lado se quedó atrás,
     // así que TODA sesión moría con «el agente no está certificado por tu vault: no-record».
-    // `clientLink` no trae el acta, así que se le pide a la bóveda una vez y se guarda.
-    const acta = await this._acta()
+    // `clientLink` no trae el acta, así que se le pide a la bóveda (`_acta`) o llega hecha.
     const chk = await verifyChain({
       data: res.ack, signature: res.signature, cert: res.cert,
       actaSeq: acta?.seq ?? null, sealers: acta ? sealersOf(acta) : null

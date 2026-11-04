@@ -97,6 +97,42 @@ test('cliente: el acta se vuelve a pedir en cada saludo (una pestaña vive días
   await assert.rejects(rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert, eph: eph2 }), eph2), { reason: 'not-in-record' })
 })
 
+test('cliente: con un acta de confianza a mano, el saludo no espera a la bóveda', async () => {
+  const v = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
+  await v.admit(machine.publickey, 'pc'); await v.admit(me.publickey, 'tel')
+  let asked = 0
+  const rc = new RemoteAgentClient({ id: { me: { publickey: me.publickey }, listVaultDevices: async () => { asked++; return { acta: v.acta } } }, iss: v.iss }, { agentPubkey: machine.publickey, trustedActa: () => v.acta })
+  const eph = await makeEphemeral()
+  await rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert: await v.cert(machine.publickey), eph }), eph)
+  assert.ok(rc.key)
+  assert.equal(asked, 0, 'la bóveda no se pregunta')
+})
+
+test('cliente: si el acta de confianza va atrás, se pregunta a la bóveda y se juzga otra vez', async () => {
+  const v = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
+  await v.admit(me.publickey, 'tel')
+  const old = v.acta                       // todavía sin la máquina, recién emparejada después
+  await v.admit(machine.publickey, 'pc')
+  let asked = 0
+  const rc = new RemoteAgentClient({ id: { me: { publickey: me.publickey }, listVaultDevices: async () => { asked++; return { acta: v.acta } } }, iss: v.iss }, { agentPubkey: machine.publickey, trustedActa: () => old })
+  const eph = await makeEphemeral()
+  await rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert: await v.cert(machine.publickey), eph }), eph)
+  assert.ok(rc.key)
+  assert.equal(asked, 1)
+})
+
+test('cliente: la bóveda sigue mandando aunque el acta de confianza diga que sí', async () => {
+  // Si la de confianza y la de la bóveda no dicen lo mismo, la que vale es la que pasa; pero
+  // una máquina quitada que tampoco está en la de confianza no entra por ninguna.
+  const v = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
+  await v.admit(machine.publickey, 'pc'); await v.admit(me.publickey, 'tel')
+  const cert = await v.cert(machine.publickey)
+  await v.remove(machine.publickey)
+  const rc = new RemoteAgentClient({ id: { me: { publickey: me.publickey }, listVaultDevices: async () => ({ acta: v.acta }) }, iss: v.iss }, { agentPubkey: machine.publickey, trustedActa: () => v.acta })
+  const eph = await makeEphemeral()
+  await assert.rejects(rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert, eph }), eph), { reason: 'not-in-record' })
+})
+
 test('cliente: sin acta no se decide que sí', async () => {
   const v = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
   await v.admit(machine.publickey, 'pc')
