@@ -332,7 +332,36 @@ export async function startRemoteAgent (opts = {}) {
     link.actaTrusted = true
     try { saveLink(dir, link) } catch (_) {}
     evictOutsiders()
+    shareActa(acta)
     return true
+  }
+
+  /**
+   * LA CACHÉ DE ACTAS DEL PROXIO (websocket-proxy ≥ 1.10.0). Quien adopta un acta nueva se la
+   * deja al proxio, así el siguiente aparato de la cuenta se entera sin despertar a la bóveda;
+   * y antes de preguntarle a la bóveda se mira ahí. Lo que llega del proxio pasa por
+   * `recordActa`, o sea que se adopta solo si encadena desde la de confianza: el proxio no
+   * puede colar nada, como mucho no tener la más nueva.
+   */
+  const actaCacheProblems = new Set()
+  function noteActaCache (what, e) {
+    const code = e?.code || 'error'
+    if (actaCacheProblems.has(what + code)) return
+    actaCacheProblems.add(what + code)
+    if (!opts.quiet) console.error(`[remote-agent] record cache on the proxy (${what}): ${code} · ${e?.message || ''}`)
+  }
+  function shareActa (acta) {
+    // Por detrás y sin tumbar a quien adopta: si falla, se dice una vez y sigue.
+    Promise.resolve().then(() => client.putActa(acta)).catch((e) => noteActaCache('put', e))
+  }
+  /** Adopta la más nueva del proxio que encadene. `true` si el acta avanzó. */
+  async function actaFromProxy () {
+    const profileId = trustedActa()?.profileId
+    if (!profileId) return false
+    let list
+    try { list = await client.getActas(profileId, { sinceSeq: link.actaSeq ?? -1 }) } catch (e) { noteActaCache('get', e); return false }
+    for (const a of list) if (await recordActa(a)) return true
+    return false
   }
 
   /**
@@ -366,7 +395,8 @@ export async function startRemoteAgent (opts = {}) {
 
   const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
   /** Trae el acta ahora (con freno) y dice si AVANZÓ: solo entonces merece juzgar otra vez. */
-  const catchUp = makeCatchUp({ refresh: vaultTick, seq: () => link.actaSeq })
+  // Ponerse al día mira primero la caché del proxio y, si no trae nada que encadene, la bóveda.
+  const catchUp = makeCatchUp({ refresh: async () => { if (!await actaFromProxy()) await vaultTick() }, seq: () => link.actaSeq })
   vaultTick()
   const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
 

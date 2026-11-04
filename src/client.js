@@ -21,7 +21,7 @@
  * `on('message', cb)` recibe los payloads del agente, ya descifrados.
  */
 import { verifyChain } from '@dotrino/identity/capabilities'
-import { sealersOf, samePubkey } from '@dotrino/identity/acta'
+import { sealersOf, samePubkey, canAdopt } from '@dotrino/identity/acta'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { canGreet } from './membership.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, DEFAULT_PROXY } from '../protocol.js'
@@ -207,8 +207,26 @@ export class RemoteAgentClient {
     try { local = this.trustedActa?.() || null } catch (_) {}
     if (local) {
       try { return await this._judgeAck(res, eph, local) } catch (e) { if (e.code !== 'unauthorized') throw e }
+      // Va atrás: antes que la bóveda, la caché de actas del proxio (websocket-proxy ≥ 1.10.0).
+      const newer = await this._actaFromProxy(local)
+      if (newer) {
+        try { return await this._judgeAck(res, eph, newer) } catch (e) { if (e.code !== 'unauthorized') throw e }
+      }
     }
     return this._judgeAck(res, eph, await this._acta())
+  }
+
+  /**
+   * La más nueva de la caché del proxio que ENCADENE desde `trusted` (`canAdopt`), o `null`.
+   * El proxio no es de fiar: lo que no encadena se ignora. Si no se pudo preguntar, el motivo
+   * queda en `actaCacheError` y se sigue con la bóveda, que es quien manda.
+   */
+  async _actaFromProxy (trusted) {
+    if (!trusted?.profileId) return null
+    let list
+    try { list = await this.client.getActas(trusted.profileId, { sinceSeq: trusted.seq }) } catch (e) { this.actaCacheError = e; return null }
+    for (const a of list) if ((await canAdopt({ candidate: a, current: trusted })).adopt) return a
+    return null
   }
 
   /** Juzga el ack con `acta` y, si pasa, deja `sid` y `key`. */

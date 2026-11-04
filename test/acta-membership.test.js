@@ -133,6 +133,38 @@ test('cliente: la bóveda sigue mandando aunque el acta de confianza diga que s�
   await assert.rejects(rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert, eph }), eph), { reason: 'not-in-record' })
 })
 
+test('cliente: si el acta de confianza va atrás, la caché del proxio va antes que la bóveda', async () => {
+  const v = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
+  await v.admit(me.publickey, 'tel')
+  const old = v.acta
+  await v.admit(machine.publickey, 'pc')
+  let asked = 0
+  const rc = new RemoteAgentClient({ id: { me: { publickey: me.publickey }, listVaultDevices: async () => { asked++; return { acta: v.acta } } }, iss: v.iss }, { agentPubkey: machine.publickey, trustedActa: () => old })
+  let since = null
+  rc.client = { getActas: async (_p, o) => { since = o.sinceSeq; return [v.acta] } }
+  const eph = await makeEphemeral()
+  await rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert: await v.cert(machine.publickey), eph }), eph)
+  assert.ok(rc.key)
+  assert.equal(asked, 0, 'la bóveda no se pregunta')
+  assert.equal(since, old.seq)
+})
+
+test('cliente: un acta del proxio que no encadena se ignora y manda la bóveda', async () => {
+  const v = await vault(); const other = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
+  await v.admit(me.publickey, 'tel')
+  const old = v.acta
+  await v.admit(machine.publickey, 'pc')
+  // Otra cuenta que nombra a la máquina: el proxio no puede colarla.
+  await other.admit(machine.publickey, 'pc'); await other.admit(me.publickey, 'tel'); await other.admit(me.publickey + 'x', 'z').catch(() => {})
+  let asked = 0
+  const rc = new RemoteAgentClient({ id: { me: { publickey: me.publickey }, listVaultDevices: async () => { asked++; return { acta: v.acta } } }, iss: v.iss }, { agentPubkey: machine.publickey, trustedActa: () => old })
+  rc.client = { getActas: async () => [other.acta] }
+  const eph = await makeEphemeral()
+  await rc._checkAck(await ackFrom({ signer: machine, machine: machine.publickey, cert: await v.cert(machine.publickey), eph }), eph)
+  assert.ok(rc.key)
+  assert.equal(asked, 1)
+})
+
 test('cliente: sin acta no se decide que sí', async () => {
   const v = await vault(); const machine = await makeDeviceKey(); const me = await makeDeviceKey()
   await v.admit(machine.publickey, 'pc')
@@ -214,4 +246,39 @@ test('Node: `listVaultDevices` no devuelve un acta que llegó por la red sin com
   await v.admit(forger.publickey, 'nuevo')
   assert.equal(await checkedActa(link, v.acta, machine.publickey), v.acta, 'la que encadena, sí')
   assert.equal(await checkedActa({ iss: v.iss, cert: link.cert }, forged, machine.publickey), null, 'sin acta de confianza y con una falsa: nada')
+})
+
+test('agente: un aparato recién emparejado entra con el acta de la caché del proxio, sin la bóveda', async () => {
+  const v = await vault(); const b = bus()
+  const machine = await makeDeviceKey(); const laptop = await makeDeviceKey()
+  await v.admit(machine.publickey, 'pc')
+  const link = { device: machine, cert: await v.cert(machine.publickey), acta: v.acta, actaSeq: v.acta.seq, actaTrusted: true, iss: v.iss, proxy: 'wss://bus.invalid', label: 'pc', at: Date.now() }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ra-cache-'))
+  fs.writeFileSync(path.join(dir, 'link.json'), JSON.stringify(link))
+  // La bóveda está dormida: no contesta nada.
+  let vaultAsked = 0
+  const vaultEp = b.endpoint('tok-vault')
+  vaultEp.on('message', (_f, p) => { if (p?.type === VMSG.DEVICES) vaultAsked++ })
+  await vaultEp.identifyAs({ publickey: v.iss })
+  const agentEp = b.endpoint('tok-agent')
+  const put = []
+  agentEp.getActas = async (profileId, { sinceSeq }) => (profileId === v.acta.profileId ? [v.acta].filter((a) => a.seq > sinceSeq) : [])
+  agentEp.putActa = async (a) => { put.push(a.seq); return { stored: true } }
+  const agent = await startRemoteAgent({ dir, quiet: true, client: agentEp })
+  await wait(50)
+  const before = vaultAsked
+
+  await v.admit(laptop.publickey, 'laptop')        // el acta avanzó y el agente no lo sabe
+  const laptopEp = b.endpoint('tok-laptop')
+  const replies = []
+  laptopEp.on('message', (_f, p) => replies.push(p))
+  const eph = await makeEphemeral()
+  const data = { op: HS, eph: eph.pub, publickey: laptop.publickey, ts: Date.now() }
+  const { signature } = await signWithDevice({ privateJwk: laptop.privateJwk, data })
+  laptopEp.send('tok-agent', { type: HS, data, signature, cert: await v.cert(laptop.publickey) })
+  await wait(150)
+  assert.equal(replies.at(-1)?.type, ACK, 'entra')
+  assert.equal(vaultAsked, before, 'sin preguntar a la bóveda')
+  assert.ok(put.includes(v.acta.seq), 'y la adoptada se le deja al proxio')
+  agent.close(); fs.rmSync(dir, { recursive: true, force: true })
 })
