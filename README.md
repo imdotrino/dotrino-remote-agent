@@ -107,6 +107,14 @@ parámetros (`{ ns, proxyUrl: link.proxy, masterPubkey: link.iss, device, cert, 
 Un agente que corre UNA vez (un bot por cron) no tiene el tic de renovación de
 `startRemoteAgent`: que llame a `renewLink(link)` en cada corrida, o su cert muere a los 30 días.
 
+### El enlace va cifrado en reposo
+
+`saveLink` escribe `link.json` cifrado con `@dotrino/vault/atrest` (≥ 0.115.0), el mismo
+cifrado de la bóveda: una clave sacada de esta máquina, así que el archivo copiado a otro
+equipo no sirve. `loadLink` reescribe cifrado un enlace en claro de una versión anterior.
+Si el enlace existe y no se puede abrir, **lanza** `link-unreadable`: `null` es solo «no
+hay enlace». No protege contra quien ya entra a esta máquina como tu usuario.
+
 ### Sin bóveda: identidad propia (`selfLink`)
 
 Un agente no tiene por qué exigir una bóveda. `selfLink({ label, dir })` crea las llaves

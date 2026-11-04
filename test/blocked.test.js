@@ -8,6 +8,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { loadLink } from '../src/link.js'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -105,7 +106,7 @@ test('bloqueado: no saluda, se le cierra la sesión abierta, y la lista sobreviv
   const another = await greet()
   assert.equal(another.type, ERROR)
   assert.equal(another.code, 'blocked')
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'link.json'), 'utf8')).blocked, [laptop.publickey], 'persistido en el enlace')
+  assert.deepEqual(loadLink(dir).blocked, [laptop.publickey], 'persistido en el enlace')
   agent.close()
 
   // Sin bóveda: el agente arranca con la lista guardada y sigue cerrando la puerta.

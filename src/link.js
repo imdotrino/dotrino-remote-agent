@@ -22,6 +22,9 @@ import { installNodeGlobals } from '../node-globals.js'
 import { adoptRecord } from './record.js'
 import { verifySealerChain, genesisActa, sealActa } from '@dotrino/identity/acta'
 import { DEFAULT_PROXY, RENEW_BEFORE_MS } from '../protocol.js'
+// Estático y no perezoso: `loadLink`/`saveLink` son síncronos y así siguen. Necesita
+// @dotrino/vault >= 0.115.0 (la primera que exporta `atrest`).
+import { atRestFor, isEncrypted } from '@dotrino/vault/atrest'
 
 export function dataDir (name = 'dotrino-remote-agent') {
   if (process.env.DOTRINO_REMOTE_AGENT_DIR) return process.env.DOTRINO_REMOTE_AGENT_DIR
@@ -31,15 +34,51 @@ export function dataDir (name = 'dotrino-remote-agent') {
 
 const linkPath = (dir) => path.join(dir, 'link.json')
 
-/** Lee el enlace persistido (o null si no está enrolado). */
+/*
+ * EL ENLACE VA CIFRADO EN REPOSO (0.30.0). Lleva la llave privada del aparato, y hasta aquí
+ * estaba en claro (0600): copiar el archivo bastaba para hacerse pasar por el aparato. Se cifra
+ * con `@dotrino/vault/atrest`, el mismo cifrado de la bóveda y de la identidad de un servicio:
+ * una clave sacada de esta máquina (`/etc/machine-id` + un salt de la carpeta), así que el
+ * archivo copiado a otro equipo no sirve. No protege contra quien ya entra a esta máquina
+ * como tu usuario; eso pediría un TPM o el llavero del sistema.
+ */
+
+/**
+ * Lee el enlace persistido, o `null` si NO EXISTE. Un enlace en claro (anterior a 0.30.0) se
+ * lee y se reescribe cifrado en el acto, comprobando antes que se vuelve a leer igual.
+ *
+ * Si existe y no se puede leer —otro equipo, la máquina cambió, el archivo está roto— LANZA
+ * (`link-unreadable`). Devolver `null` diría «no hay enlace», y quien lo llama crearía otro
+ * encima del que ya era el aparato: la identidad se perdería en silencio.
+ */
 export function loadLink (dir = dataDir()) {
-  try { return JSON.parse(fs.readFileSync(linkPath(dir), 'utf8')) } catch { return null }
+  let text
+  try { text = fs.readFileSync(linkPath(dir), 'utf8') } catch (e) {
+    if (e?.code === 'ENOENT') return null
+    throw Object.assign(new Error(`cannot read the link (${linkPath(dir)}): ${e.message}`), { code: 'link-unreadable' })
+  }
+  const box = atRestFor(dir)
+  let link
+  try { link = JSON.parse(box.decrypt(text)) } catch (e) {
+    throw Object.assign(new Error(`cannot open the link (${linkPath(dir)}): it was encrypted on another machine, or the file is damaged. Enroll this device again.`), { code: 'link-unreadable', cause: e })
+  }
+  if (!isEncrypted(text)) writeEncrypted(dir, box, link)
+  return link
 }
 
-/** Persiste el enlace (0600). Exportada porque la RENOVACIÓN del cert lo reescribe. */
+function writeEncrypted (dir, box, link) {
+  const json = JSON.stringify(link, null, 2)
+  const blob = box.encrypt(json)
+  if (box.decrypt(blob) !== json) throw Object.assign(new Error('link: at-rest verification failed, nothing was written'), { code: 'link-unwritable' })
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const tmp = linkPath(dir) + '.tmp'
+  fs.writeFileSync(tmp, blob, { mode: 0o600 })
+  fs.renameSync(tmp, linkPath(dir))
+}
+
+/** Persiste el enlace, cifrado (0600). Exportada porque la RENOVACIÓN del cert lo reescribe. */
 export function saveLink (dir, link) {
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(linkPath(dir), JSON.stringify(link, null, 2), { mode: 0o600 })
+  writeEncrypted(dir, atRestFor(dir), link)
 }
 
 /**
