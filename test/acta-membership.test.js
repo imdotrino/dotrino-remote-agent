@@ -276,7 +276,8 @@ test('agente: un aparato recién emparejado entra con el acta de la caché del p
   const data = { op: HS, eph: eph.pub, publickey: laptop.publickey, ts: Date.now() }
   const { signature } = await signWithDevice({ privateJwk: laptop.privateJwk, data })
   laptopEp.send('tok-agent', { type: HS, data, signature, cert: await v.cert(laptop.publickey) })
-  await wait(150)
+  // Hasta que conteste: en CI la verificación tarda más que aquí.
+  for (let i = 0; i < 60 && !replies.length; i++) await wait(50)
   assert.equal(replies.at(-1)?.type, ACK, 'entra')
   assert.equal(vaultAsked, before, 'sin preguntar a la bóveda')
   assert.ok(put.includes(v.acta.seq), 'y la adoptada se le deja al proxio')
