@@ -115,9 +115,9 @@ miembro: una cuenta de un solo aparato, la misma forma que «este dispositivo es
 en el navegador. `identityFromLink` la sirve igual (`signData` lleva la cadena `[génesis]`
 y `verifySignedFor` la acepta); lo que pregunta a una bóveda lanza `no-vault`.
 
-Para pasarlo después a una cuenta **con la misma llave**: `enroll({ qr, label, dir, keep:
-link })`. Necesita `@dotrino/vault` ≥ 0.115.0; con una más vieja se para con
-`key-not-kept` en vez de cambiar de llave en silencio.
+Emparejarlo después con una bóveda (`enroll`) le da **una llave nueva** y sobrescribe el
+enlace: una llave vive en una sola cuenta. Si la dirección o el nombre del agente salen de
+la llave, cambian al emparejar.
 
 ### Dónde vive el enlace: `~/.dotrino/agent/<tipo>/<nombre>/` (el estándar)
 

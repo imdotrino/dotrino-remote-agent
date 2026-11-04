@@ -84,7 +84,7 @@ export function b64urlDecode (s) {
  *        que un humano lo TIPEE en la bóveda al aprobar (el código NO viaja de aquí).
  * @param {number} [args.timeoutMs=180000]
  */
-export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns = null, onChallenge, timeoutMs = 180000, keep = null } = {}) {
+export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns = null, onChallenge, timeoutMs = 180000 } = {}) {
   installNodeGlobals(dir)
   const { enrollWithVault } = await import('@dotrino/vault/service')
   const res = await enrollWithVault({
@@ -92,14 +92,8 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
     label,
     expectedScope: ns ? 'vault:secrets:' + ns : null,
     onCode: onChallenge,
-    approveTimeoutMs: timeoutMs,
-    ...(keep ? { device: keep.device, enc: keep.enc || null } : {})
+    approveTimeoutMs: timeoutMs
   })
-  // Conservar la llave era lo pedido: una bóveda vieja (`@dotrino/vault` < 0.115.0) ignora
-  // `device` y crea otra, y entonces la dirección que sale de la llave cambiaría sin avisar.
-  if (keep && res.device?.publickey !== keep.device.publickey) {
-    throw Object.assign(new Error('the vault library created a new key instead of keeping this one: install @dotrino/vault >= 0.115.0'), { code: 'key-not-kept' })
-  }
   const link = { device: res.device, enc: res.enc, cert: res.cert, iss: res.iss, proxy: res.proxy, label, ...(ns ? { ns } : {}), at: Date.now() }
   saveLink(dir, link)
   return link
@@ -113,8 +107,11 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
  * es un acta autofirmada.
  *
  * El enlace queda `{ device, enc, label, self: true, sealerChain: [génesis], at }`, sin
- * `cert` ni `iss`. Emparejarlo después con una bóveda (`enroll({ keep: link })`) mete ESTAS
- * llaves en el acta de la cuenta: el aparato sigue siendo el mismo.
+ * `cert` ni `iss`.
+ *
+ * EMPAREJARLO DESPUÉS CAMBIA LA LLAVE, a propósito (dueño, 2026-11-04): `enroll` crea otra y
+ * sobrescribe este enlace. Una llave está en UNA sola cuenta. Si entrara a una bóveda con la
+ * misma, seguiría siendo la raíz de su génesis y podría entrar igual a otras bóvedas.
  *
  * @param {{ label?: string, dir?: string }} [args]
  */
