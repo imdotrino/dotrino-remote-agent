@@ -121,6 +121,7 @@ export class AgentSession {
  * @param {()=>void} [opts.onReady]   agente listo y escuchando.
  * @param {boolean} [opts.quiet]      sin logs.
  * @param {number} [opts.sessionGoneMs]  cuánto se espera a un cliente cuya conexión se fue (`SESSION_GONE_MS`).
+ * @param {number} [opts.sessionTtlMs]   cuánto dura una sesión sin mensajes (`SESSION_TTL_MS`, 30 min).
  * @param {number} [opts.netLogMs]    cada cuánto van al log las estadísticas de red (5 min).
  * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
  * @param {string} [opts.product]     qué producto es (`accounts`, `terminal-agent`…), para el anuncio a la bóveda.
@@ -369,12 +370,20 @@ export async function startRemoteAgent (opts = {}) {
   vaultTick()
   const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
 
+  const ttlMs = opts.sessionTtlMs ?? SESSION_TTL_MS
+  // UNA SESIÓN QUE VENCE SE LE DICE AL CLIENTE en ese momento, con el mismo `unknown-session`
+  // que recibiría al mandar algo. Antes vencía callada: la ventana de una consola quieta seguía
+  // pareciendo abierta y solo se enteraba al teclear, con la consola ya perdida (2026-11-04).
+  // Así el cliente vuelve a saludar enseguida y la app decide qué enseña.
   const sweeper = setInterval(() => {
     const now = Date.now()
     for (const [sid, s] of sessions) {
-      if (now > s._exp) { s.close(); sessions.delete(sid); audit('session-expire', { sid: sid.slice(0, 8) }) }
+      if (now > s._exp) {
+        s.close(); sessions.delete(sid); audit('session-expire', { sid: sid.slice(0, 8) })
+        if (!s._gone) send(s.from, { type: ERROR, code: 'unknown-session', sid, error: 'unknown or expired session' })
+      }
     }
-  }, 60 * 1000); sweeper.unref?.()
+  }, Math.min(60 * 1000, ttlMs)); sweeper.unref?.()
 
   async function handleHandshake (from, p) {
     const { data, signature, cert } = p
@@ -439,7 +448,7 @@ export async function startRemoteAgent (opts = {}) {
     const { signature: ackSig } = await signWithDevice({ privateJwk: link.device.privateJwk, data: ack })
 
     const session = new AgentSession({ sid, key, from, device: chk.device, send, isDirect: typeof client.isWebRTCOpen === 'function' ? (t) => client.isWebRTCOpen(t) : null })
-    session._exp = Date.now() + SESSION_TTL_MS
+    session._exp = Date.now() + ttlMs
     // El papel con que entró: si después se retira (`revoked`), la sesión se cierra.
     session._certNonce = cert.nonce || null
     sessions.set(sid, session)
@@ -455,7 +464,7 @@ export async function startRemoteAgent (opts = {}) {
     // se reinició, o venció) y vuelve a saludar solo, en vez de quedarse con un error. Se
     // comprueba por el código, no por la frase.
     if (!s) return send(from, { type: ERROR, code: 'unknown-session', sid: p.sid, error: 'unknown or expired session' })
-    s._exp = Date.now() + SESSION_TTL_MS
+    s._exp = Date.now() + ttlMs
     s.from = from
     if (s._gone) { clearTimeout(s._gone); s._gone = null }
     s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'invalid envelope' }))

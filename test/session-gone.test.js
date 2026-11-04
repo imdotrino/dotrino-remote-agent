@@ -15,7 +15,7 @@ import path from 'node:path'
 import { makeDeviceKey, signDelegationWith, signWithDevice } from '@dotrino/identity/capabilities'
 import { genesisActa, applyChanges, sealActa } from '@dotrino/identity/acta'
 import { startRemoteAgent } from '../src/agent.js'
-import { HS, ACK, DATA, VMSG } from '../protocol.js'
+import { HS, ACK, DATA, ERROR, VMSG } from '../protocol.js'
 import { makeEphemeral, deriveKey, seal } from '../e2e.js'
 
 async function vault () {
@@ -57,7 +57,7 @@ function bus () {
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 const GONE_MS = 150
 
-async function mount () {
+async function mount ({ ttlMs } = {}) {
   const v = await vault(); const b = bus()
   const machine = await makeDeviceKey({ label: 'terminal' })
   const phone = await makeDeviceKey({ label: 'teléfono' })
@@ -69,21 +69,22 @@ async function mount () {
   vaultEp.on('message', (from, p) => { if (p?.type === VMSG.DEVICES) vaultEp.send(from, { type: VMSG.DEVICES_RESULT, devices: [], revoked: [], blocked: [], acta: v.acta }) })
   await vaultEp.identifyAs({ publickey: v.iss })
   const sessions = []
-  const agent = await startRemoteAgent({ dir, quiet: true, sessionGoneMs: GONE_MS, client: b.endpoint('tok-agent'), onSession: (s) => sessions.push(s) })
+  const agent = await startRemoteAgent({ dir, quiet: true, sessionGoneMs: GONE_MS, ...(ttlMs ? { sessionTtlMs: ttlMs } : {}), client: b.endpoint('tok-agent'), onSession: (s) => sessions.push(s) })
   await wait(50)
 
   /** Saluda desde `token` y devuelve con qué seguir hablando por esa sesión. */
   const greet = async (token) => {
     const ep = b.endpoint(token)
     let ack = null
-    ep.on('message', (_f, p) => { if (p?.type === ACK) ack = p })
+    const errors = []
+    ep.on('message', (_f, p) => { if (p?.type === ACK) ack = p; else if (p?.type === ERROR) errors.push(p) })
     const eph = await makeEphemeral()
     const data = { op: HS, eph: eph.pub, publickey: phone.publickey, ts: Date.now() }
     const { signature } = await signWithDevice({ privateJwk: phone.privateJwk, data })
     ep.send('tok-agent', { type: HS, data, signature, cert: await v.cert(phone.publickey) })
     await wait(100)
     assert.ok(ack, 'el agente contestó el saludo')
-    return { sid: ack.sid, key: await deriveKey(eph.privateKey, ack.ack.seph, ack.sid) }
+    return { sid: ack.sid, key: await deriveKey(eph.privateKey, ack.ack.seph, ack.sid), errors }
   }
   const end = () => { agent.close(); fs.rmSync(dir, { recursive: true, force: true }) }
   return { b, sessions, greet, end }
@@ -127,5 +128,29 @@ test('la baja de un token no toca las sesiones de otro', async () => {
   b.drop('tok-phone-1')
   await wait(GONE_MS * 2)
   assert.deepEqual(closedOnes, [0])
+  end()
+})
+
+test('una sesión que vence sin mensajes se le dice al cliente en ese momento', async () => {
+  const TTL = 120
+  const { sessions, greet, end } = await mount({ ttlMs: TTL })
+  const { sid, errors } = await greet('tok-phone-1')
+  let closed = false
+  sessions[0].on('close', () => { closed = true })
+  await wait(TTL * 3)
+  assert.equal(closed, true, 'venció')
+  assert.deepEqual(errors.map((e) => [e.code, e.sid]), [['unknown-session', sid]], 'y el cliente se enteró sin tener que mandar nada')
+  end()
+})
+
+test('mientras llegan mensajes la sesión no vence', async () => {
+  const TTL = 150
+  const { b, sessions, greet, end } = await mount({ ttlMs: TTL })
+  const { sid, key, errors } = await greet('tok-phone-1')
+  let closed = false
+  sessions[0].on('close', () => { closed = true })
+  for (let i = 0; i < 5; i++) { await wait(TTL / 2); b.endpoint('tok-phone-1').send('tok-agent', { type: DATA, sid, env: await seal(key, { type: 'list' }) }) }
+  assert.equal(closed, false)
+  assert.deepEqual(errors, [])
   end()
 })
