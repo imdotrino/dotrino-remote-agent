@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/remote-agent",
-  "version": "0.32.2",
+  "version": "0.33.0",
   "description": "Middleware compartido del ecosistema Dotrino para apps de agente remoto cifrado punto a punto (handshake E2E, emparejamiento SAS con vault, revocación, descubrimiento). Lo consumen dotrino-terminal (PTY) y dotrino-ia (chat con IA).",
   "type": "module",
   "main": "./index.js",
@@ -48,13 +48,13 @@
     "p2p"
   ],
   "peerDependencies": {
-    "@dotrino/identity": ">=0.121.7",
+    "@dotrino/identity": ">=0.136.0",
     "@dotrino/proxy-client": ">=0.46.0",
     "@dotrino/vault": ">=0.115.0"
   },
   "devDependencies": {
-    "@dotrino/identity": "0.135.0",
-    "@dotrino/proxy-client": "0.46.0",
+    "@dotrino/identity": "0.136.0",
+    "@dotrino/proxy-client": "0.47.0",
     "@dotrino/vault": "0.115.0",
     "@types/node": "22.20.1",
     "@types/ws": "8.18.1",

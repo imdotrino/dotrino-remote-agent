@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId, keyLabel } from '@dotrino/identity/capabilities'
 import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
+import { sendToVault, acceptReply } from '@dotrino/identity/vault-seal'
 import { adoptRecord } from './record.js'
 import { canGreet } from './membership.js'
 import { installNodeGlobals } from '../node-globals.js'
@@ -236,24 +237,41 @@ export async function startRemoteAgent (opts = {}) {
    * @returns {Promise<any>} la respuesta de la bóveda; cada llamador lee sus campos con guardas
    */
   async function vaultRpc (sendType, okType, payload, timeoutMs = 15000) {
+    // SELLADA (`dotrino-vault/docs/sealed-requests.md`): la petición entera a las bóvedas del
+    // acta, y la respuesta a una llave de un solo uso (`rek`) que va dentro de lo firmado. Por
+    // eso va por una conexión PROPIA y corta: el cliente compartido no puede abrir lo sellado a
+    // una llave que no es la suya. Con `opts.client` (solo pruebas, una bóveda de mentira) va
+    // por ese transporte tal cual.
+    const { makeEncKeypair, WebSocketProxyClient } = await import('@dotrino/proxy-client')
+    const rk = opts.client ? null : await makeEncKeypair()
     // QUÉ SOY Y QUÉ NECESITO DEL ACTA, dentro de lo firmado: la bóveda lo apunta y enseña lo que
     // falta en la fila de este aparato (dueño, 2026-10-27). `accounts` se pasó días sin `sign`,
     // renovando un papel que no le servía, sin que ninguna pantalla lo dijera.
-    const data = { ...payload, v: MY_DECL }
+    const data = { ...payload, ...(rk ? { rek: rk.encPub } : {}), v: MY_DECL }
     const { signature } = await signWithDevice({ privateJwk: link.device.privateJwk, data })
-    return new Promise((resolve, reject) => {
-      // El temporizador se LIMPIA al contestar (y no retiene el bucle de eventos):
-      // sin eso, cada consulta al vault dejaba 15 s de espera pendiente y un proceso
-      // corto que solo quería preguntar algo se quedaba colgado hasta que vencía.
-      const done = (/** @type {(v: any) => void} */ fn, /** @type {unknown} */ v) => { off(); clearTimeout(timer); fn(v) }
-      const off = client.on('message', (_f, /** @type {any} */ p) => {
-        if (p?.type === okType) done(resolve, p)
-        else if (p?.type === VMSG.ERROR) done(reject, new Error(p.error))
+    const message = { type: sendType, data, signature, cert: link.cert }
+    /** @type {any} */
+    const via = opts.client || new WebSocketProxyClient({ url: proxyUrl, autoReconnect: false, myEncPrivateKey: rk?.privateKey })
+    const warn = (/** @type {string} */ line) => { if (!opts.quiet) console.error('[remote-agent] ' + line) }
+    try {
+      if (!opts.client) await via.connect()
+      return await new Promise((resolve, reject) => {
+        // El temporizador se LIMPIA al contestar (y no retiene el bucle de eventos):
+        // sin eso, cada consulta al vault dejaba 15 s de espera pendiente y un proceso
+        // corto que solo quería preguntar algo se quedaba colgado hasta que vencía.
+        const done = (/** @type {(v: any) => void} */ fn, /** @type {unknown} */ v) => { off(); clearTimeout(timer); fn(v) }
+        const off = via.on('message', (/** @type {any} */ _f, /** @type {any} */ p, /** @type {any} */ meta) => {
+          if (p?.type === okType) {
+            if (!opts.client && !acceptReply({ meta, type: okType, warn })) return
+            done(resolve, p)
+          } else if (p?.type === VMSG.ERROR) done(reject, new Error(p.error))
+        })
+        const timer = setTimeout(() => done(reject, new Error('timeout')), timeoutMs)
+        timer.unref?.()
+        if (opts.client) via.sendByPubkey(master, message)
+        else sendToVault(via, { dest: master, acta: link.acta || null, payload: message, warn }).catch((e) => done(reject, e))
       })
-      const timer = setTimeout(() => done(reject, new Error('timeout')), timeoutMs)
-      timer.unref?.()
-      client.sendByPubkey(master, { type: sendType, data, signature, cert: link.cert })
-    })
+    } finally { if (!opts.client) { try { via.close() } catch (_) {} } }
   }
 
   // --- Revocación: refrescar la lista del vault por el proxy (best-effort) ---

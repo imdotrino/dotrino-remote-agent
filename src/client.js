@@ -158,7 +158,6 @@ export class RemoteAgentClient {
 
     // El agente se reinició: su token ya no existe. El pilar ya mandó ese mensaje por su
     // pubkey; aquí solo se deja de usar el token hasta el próximo saludo.
-    // @ts-expect-error proxy-client 0.46.0: su ProxyEvent no lista 'token_gone', que sí emite (src/client.js)
     client.on('token_gone', (/** @type {string} */ token) => {
       this._directPeers.delete(token)
       if (token === this.agentToken) this.agentToken = null
