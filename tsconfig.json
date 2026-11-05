@@ -9,13 +9,10 @@
     ],
     "allowJs": true,
     "checkJs": true,
-    "strict": false,
-    "noImplicitAny": false,
-    "strictNullChecks": false,
+    "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "baseUrl": ".",
     "noEmit": true,
     "types": [
       "node"
@@ -23,11 +20,11 @@
   },
   "include": [
     "src/**/*.js",
-    "src/**/*.mjs",
-    "src/**/*.d.ts",
-    "bin/**/*.js",
-    "server.js",
-    "index.js"
+    "index.js",
+    "protocol.js",
+    "node-globals.js",
+    "e2e.js",
+    "types.d.ts"
   ],
   "exclude": [
     "node_modules",

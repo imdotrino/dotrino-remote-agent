@@ -20,6 +20,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 export const DEFAULT_NAME = 'default'
+/** @param {unknown} n @returns {n is string} */
 export const isValidName = (n) => typeof n === 'string' && /^[a-z0-9-]{1,32}$/.test(n)
 
 /**
@@ -33,9 +34,14 @@ export function instancesRoot (kind) {
   return path.join(home, kind)
 }
 
-/** Nombres de las instancias enlazadas (las que tienen `link.json`). */
+/**
+ * Nombres de las instancias enlazadas (las que tienen `link.json`).
+ * @param {string} kind
+ * @returns {string[]}
+ */
 export function listInstances (kind) {
   const root = instancesRoot(kind)
+  /** @type {string[]} */
   let names = []
   try { names = fs.readdirSync(root) } catch (_) { return [] }
   return names.filter((n) => isValidName(n) && fs.existsSync(path.join(root, n, 'link.json'))).sort()
@@ -47,6 +53,8 @@ export function listInstances (kind) {
  *   · sin nombre y ninguna enlazada: `default`;
  *   · sin nombre y UNA enlazada: esa;
  *   · sin nombre y VARIAS: se para y se dice cuáles hay. Elegir por el usuario sería adivinar.
+ * @param {string} kind
+ * @param {string | null} [name]
  * @returns {{ name: string, dir: string }}
  */
 export function resolveInstance (kind, name) {
@@ -64,6 +72,7 @@ export function resolveInstance (kind, name) {
  * Candado de la instancia: dos procesos con el MISMO enlace son la misma llave y se
  * estorban. Si ya corre uno vivo, se para y se dice. Devuelve `release()`.
  */
+/** @param {string} dir @returns {() => void} suelta el candado */
 export function lockInstance (dir) {
   const file = path.join(dir, 'agent.pid')
   try {
@@ -71,12 +80,13 @@ export function lockInstance (dir) {
     if (pid && pid !== process.pid && isAlive(pid)) {
       throw Object.assign(new Error(`this agent is already running (pid ${pid}). To run another one at the same time, give it its own --name`), { code: 'EALREADY' })
     }
-  } catch (e) { if (e.code === 'EALREADY') throw e }
+  } catch (e) { if (/** @type {{ code?: string }} */ (e).code === 'EALREADY') throw e }
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(file, String(process.pid), { mode: 0o600 })
   return () => { try { if (Number(fs.readFileSync(file, 'utf8')) === process.pid) fs.rmSync(file) } catch (_) {} }
 }
 
+/** @param {number} pid */
 function isAlive (pid) {
-  try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
+  try { process.kill(pid, 0); return true } catch (e) { return /** @type {{ code?: string }} */ (e).code === 'EPERM' }
 }

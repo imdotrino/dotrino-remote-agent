@@ -18,7 +18,7 @@
 import { canAdopt, verifyActa, samePubkey } from '@dotrino/identity/acta'
 
 /**
- * @param {{ link: any, candidate: any, me: string }} args  `me` = la llave pública de esta máquina.
+ * @param {{ link: import('./link.js').AgentLink, candidate: DotrinoActa | null | undefined, me: string }} args  `me` = la llave pública de esta máquina.
  * @returns {Promise<{ adopt: boolean, reason: string }>}
  */
 export async function adoptRecord ({ link, candidate, me }) {

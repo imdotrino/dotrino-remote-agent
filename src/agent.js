@@ -37,6 +37,10 @@ const PKG_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import
 
 /** Sesión cifrada con un dispositivo cliente. La app recibe esto en `onSession`. */
 export class AgentSession {
+  /**
+   * @param {{ sid: string, key: CryptoKey, from: string, device: string,
+   *   send: (to: string, obj: object) => void, isDirect?: ((token: string) => boolean) | null }} o
+   */
   constructor ({ sid, key, from, device, send, isDirect = null }) {
     this.sid = sid
     this.key = key
@@ -44,11 +48,32 @@ export class AgentSession {
     this.device = device              // pubkey del dispositivo cliente
     this._send = send                 // (to, obj) => void
     this._isDirect = isDirect         // (token) => boolean, o null si el transporte no lo sabe
+    /** @type {{ message: Array<(msg: any) => void>, close: Array<() => void> }} */
     this._h = { message: [], close: [] }
     this._closed = false
+    /** @type {Promise<void> | undefined} */
+    this._out = undefined
+    /** @type {Promise<void> | undefined} */
+    this._in = undefined
+    /** Cuándo caduca sin mensajes (ms epoch). Lo pone el agente. */
+    this._exp = 0
+    /**
+     * El nonce del papel del cliente, para cortarla si se revoca.
+     * @type {string | null}
+     */
+    this._certNonce = null
+    /**
+     * El cliente se desconectó: se le espera hasta que salte.
+     * @type {ReturnType<typeof setTimeout> | null}
+     */
+    this._gone = null
   }
 
-  /** Envía un payload de dominio cifrado al cliente. */
+  /**
+   * Envía un payload de dominio cifrado al cliente.
+   * @param {unknown} payload
+   * @returns {Promise<void>}
+   */
   send (payload) {
     if (this._closed) return Promise.resolve()
     // SALEN EN EL ORDEN EN QUE SE PIDIERON. Cifrar tarda según el tamaño: sin esta cola, un
@@ -75,6 +100,7 @@ export class AgentSession {
    * Espera a que abra el canal directo, como mucho `ms`. Resuelve `true` si abrió y `false`
    * si se acabó el plazo o la sesión se cerró — en los dos casos se sigue, por donde haya.
    */
+  /** @param {number} [ms] @returns {Promise<boolean>} */
   whenDirect (ms = 8000) {
     return new Promise((resolve) => {
       const until = Date.now() + ms
@@ -88,9 +114,15 @@ export class AgentSession {
     })
   }
 
+  /**
+   * @param {'message' | 'close'} ev  `message` recibe lo que mandó el cliente, ya descifrado
+   * @param {(msg?: any) => void} cb
+   * @returns {this}
+   */
   on (ev, cb) { this._h[ev]?.push(cb); return this }
 
   /** Lo que llega se entrega en el orden en que llegó, tarde lo que tarde en descifrarse cada uno. */
+  /** @param {{ iv: string, ct: string }} env */
   _ingest (env) {
     const opened = open(this.key, env).then((msg) => ({ msg }), () => null)
     this._in = (this._in || Promise.resolve()).then(() => opened).then((r) => {
@@ -102,7 +134,7 @@ export class AgentSession {
   close () {
     if (this._closed) return
     this._closed = true
-    clearTimeout(this._gone)
+    if (this._gone) clearTimeout(this._gone)
     for (const h of this._h.close) { try { h() } catch (_) {} }
   }
 }
@@ -110,20 +142,20 @@ export class AgentSession {
 /**
  * Arranca el agente. Devuelve `{ machine, machineId, master, client, reportIncident, isBlocked, checkCap, record, close }`.
  *
- * @param {object} opts
+ * @param {object} [opts]
  * @param {string} [opts.label]       qué agente es (`terminal-agent`, `ia-agent`…): lo contesta el pong
  *   para que las apps lo encuentren (`probeAgents`). El nombre del acta es del dueño.
  * @param {string} [opts.proxyUrl]    default wss://proxy.dotrino.com.
  * @param {string} [opts.dir]         dir del enlace (default dataDir()).
- * @param {object} [opts.link]        enlace ya cargado (override de dir).
+ * @param {import('./link.js').AgentLink | null} [opts.link]  enlace ya cargado (override de dir).
  * @param {(session:AgentSession)=>void} [opts.onSession]  cada handshake exitoso abre una sesión.
  * @param {()=>void} [opts.onRevoked] se llamó al auto-borrarse por revocación.
- * @param {()=>void} [opts.onReady]   agente listo y escuchando.
+ * @param {(o: { machine: string, machineId: string, master: string }) => void} [opts.onReady]   agente listo y escuchando.
  * @param {boolean} [opts.quiet]      sin logs.
  * @param {number} [opts.sessionGoneMs]  cuánto se espera a un cliente cuya conexión se fue (`SESSION_GONE_MS`).
  * @param {number} [opts.sessionTtlMs]   cuánto dura una sesión sin mensajes (`SESSION_TTL_MS`, 30 min).
  * @param {number} [opts.netLogMs]    cada cuánto van al log las estadísticas de red (5 min).
- * @param {object} [opts.client]      transporte ya conectado (SOLO pruebas).
+ * @param {import('@dotrino/proxy-client').WebSocketProxyClient} [opts.client]  transporte ya conectado (SOLO pruebas).
  * @param {string} [opts.product]     qué producto es (`accounts`, `terminal-agent`…), para el anuncio a la bóveda.
  * @param {string} [opts.version]     su versión. Sin `product`/`version` se anuncia como `remote-agent`.
  * @param {string[]} [opts.needs]     los permisos del acta que necesita, además de `sign`, que lo
@@ -138,23 +170,25 @@ export class AgentSession {
  */
 export async function startRemoteAgent (opts = {}) {
   const dir = opts.dir || dataDir()
-  const link = opts.link || loadLink(dir)
-  if (!link?.device?.privateJwk || !link?.cert || !link?.iss) {
+  const loaded = opts.link || loadLink(dir)
+  if (!loaded?.device?.privateJwk || !loaded?.cert || !loaded?.iss) {
     throw new Error('this machine is not linked: enroll your agent first')
   }
+  const link = loaded
   const MY_DECL = declare({
     product: opts.product || 'remote-agent', version: opts.version || PKG_VERSION,
     protocol: VAULT_PROTOCOL, speaks: VAULT_SPEAKS, needs: ['sign', ...(opts.needs || [])]
   })
-  const master = link.iss
+  const master = /** @type {string} */ (link.iss)  // comprobado arriba
   const myPub = link.device.publickey
   const myId = await keyLabel(myPub)
 
   installNodeGlobals(dir)
 
   // sid -> AgentSession
+  /** @type {Map<string, AgentSession>} */
   const sessions = new Map()
-  const hasSessionFrom = (token) => { for (const s of sessions.values()) if (s.from === token) return true; return false }
+  const hasSessionFrom = (/** @type {string} */ token) => { for (const s of sessions.values()) if (s.from === token) return true; return false }
 
   const proxyUrl = opts.proxyUrl || process.env.PROXY_URL || link.proxy || DEFAULT_PROXY
   // `client` inyectado: solo para las pruebas (transporte de mentira). En producción se
@@ -178,7 +212,7 @@ export async function startRemoteAgent (opts = {}) {
   const identify = async () => {
     if (!client.token) return
     // El sobre lo arma el pilar (`identifyAs`), que le pone el destinatario.
-    await client.identifyAs({ publickey: myPub, sign: (d) => signWithDevice({ privateJwk: link.device.privateJwk, data: d }) })
+    await client.identifyAs({ publickey: myPub, sign: (/** @type {object} */ d) => signWithDevice({ privateJwk: link.device.privateJwk, data: d }) })
   }
   await identify()
   client.on('token', () => { identify().catch(() => {}) })
@@ -186,16 +220,20 @@ export async function startRemoteAgent (opts = {}) {
   // Bitácora persistente (sessions.log, JSONL): qué dispositivo abrió sesión y cuándo
   // — auditoría local si un dispositivo tuyo cae en malas manos.
   const sessionsLog = path.join(dir, 'sessions.log')
-  const audit = (op, info = {}) => {
+  const audit = (/** @type {string} */ op, /** @type {object} */ info = {}) => {
     try { fs.appendFileSync(sessionsLog, JSON.stringify({ ts: Date.now(), op, ...info }) + '\n') } catch (_) {}
   }
 
-  const send = (to, obj) => { try { client.send(to, obj) } catch (e) { if (!opts.quiet) console.error('[remote-agent] send:', e.message) } }
+  const send = (/** @type {string} */ to, /** @type {object} */ obj) => { try { client.send(to, obj) } catch (e) { if (!opts.quiet) console.error('[remote-agent] send:', /** @type {Error} */ (e).message) } }
 
   /**
    * Petición firmada a la bóveda por el proxy, dirigida a su pubkey maestra. Es el
    * mismo sobre para todo (`data` firmado con la D + el cert de esta máquina): lo
    * comparten el refresco de revocaciones y la renovación del cert.
+   */
+  /**
+   * @param {string} sendType @param {string} okType @param {object} payload @param {number} [timeoutMs]
+   * @returns {Promise<any>} la respuesta de la bóveda; cada llamador lee sus campos con guardas
    */
   async function vaultRpc (sendType, okType, payload, timeoutMs = 15000) {
     // QUÉ SOY Y QUÉ NECESITO DEL ACTA, dentro de lo firmado: la bóveda lo apunta y enseña lo que
@@ -207,8 +245,8 @@ export async function startRemoteAgent (opts = {}) {
       // El temporizador se LIMPIA al contestar (y no retiene el bucle de eventos):
       // sin eso, cada consulta al vault dejaba 15 s de espera pendiente y un proceso
       // corto que solo quería preguntar algo se quedaba colgado hasta que vencía.
-      const done = (fn, v) => { off(); clearTimeout(timer); fn(v) }
-      const off = client.on('message', (_f, p) => {
+      const done = (/** @type {(v: any) => void} */ fn, /** @type {unknown} */ v) => { off(); clearTimeout(timer); fn(v) }
+      const off = client.on('message', (_f, /** @type {any} */ p) => {
         if (p?.type === okType) done(resolve, p)
         else if (p?.type === VMSG.ERROR) done(reject, new Error(p.error))
       })
@@ -219,29 +257,32 @@ export async function startRemoteAgent (opts = {}) {
   }
 
   // --- Revocación: refrescar la lista del vault por el proxy (best-effort) ---
+  /** @type {Set<string>} */
   let revokedSet = new Set()
   // LOS BLOQUEADOS (dueño, 2026-10-07): un aprobador bloqueó a ese aparato tras un incidente.
   // No es una revocación —sigue en el acta, y se deshace en la bóveda—, así que va aparte y
   // viaja con la lista de revocados. Se PERSISTE en el enlace: con la bóveda apagada, el
   // agente tiene que seguir cerrándole la puerta a quien ya estaba bloqueado.
+  /** @type {Set<string>} */
   let blockedSet = new Set(Array.isArray(link.blocked) ? link.blocked : [])
   async function refreshRevocations () {
     try {
       const res = await vaultRpc(VMSG.DEVICES, VMSG.DEVICES_RESULT, { op: 'devices', publickey: myPub, ts: Date.now() })
-      revokedSet = new Set((res.revoked || []).map((r) => r.nonce || r))
+      revokedSet = new Set((res.revoked || []).map((/** @type {any} */ r) => r.nonce || r))
       if (Array.isArray(res.blocked)) takeBlocked(res.blocked)
       // El acta viaja con la lista. Apuntar su `seq` es lo que dispara la renovación en el
       // mismo tic si el dueño nos cambió los permisos.
       await recordActa(res.acta)
       evictOutsiders()
     } catch (e) {
-      if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', e.message)
+      if (!opts.quiet) console.error('[remote-agent] could not refresh revocations (using cache):', /** @type {Error} */ (e).message)
     }
   }
 
   /** La lista nueva de bloqueados: se guarda, y a quien acaba de entrar en ella se le cierra la sesión. */
+  /** @param {unknown[]} pubs */
   function takeBlocked (pubs) {
-    const next = new Set(pubs.filter((p) => typeof p === 'string'))
+    const next = new Set(/** @type {string[]} */ (pubs.filter((p) => typeof p === 'string')))
     const same = next.size === blockedSet.size && [...next].every((p) => blockedSet.has(p))
     blockedSet = next
     if (same) return
@@ -261,6 +302,7 @@ export async function startRemoteAgent (opts = {}) {
    * bóveda: `{ id, approvers, blocked }` (`id: null` si nadie aprueba o ya está bloqueado).
    * No decide nada aquí: un incidente es información, y el freno local es cosa de la app.
    */
+  /** @param {{ kind: string, about: string, tries?: number | null }} o */
   async function reportIncident ({ kind, about, tries = null }) {
     if (typeof kind !== 'string' || !kind || typeof about !== 'string' || !about) throw new Error('reportIncident: kind and about are required')
     audit('incident', { kind, device: (await pubkeyId(about).catch(() => '')).slice(0, 8).toUpperCase(), tries })
@@ -300,7 +342,7 @@ export async function startRemoteAgent (opts = {}) {
       // No es fatal: el papel de antes sigue sirviendo para todo lo que el acta le siga
       // permitiendo, y el próximo tic reintenta. Se avisa igual: si esto falla, lo que el
       // dueño acaba de conceder no llega.
-      if (!opts.quiet) console.error('[remote-agent] could not renew the cert:', e.message)
+      if (!opts.quiet) console.error('[remote-agent] could not renew the cert:', /** @type {Error} */ (e).message)
     }
   }
 
@@ -317,6 +359,7 @@ export async function startRemoteAgent (opts = {}) {
    * mandar un acta inventada y nombrarse miembro. Ahora el acta tiene que encadenar desde la
    * que ya se dio por buena, o venir firmada por la bóveda con la que se enroló.
    */
+  /** @param {any} acta  lo que llegó: se comprueba antes de adoptarlo @returns {Promise<boolean>} */
   async function recordActa (acta) {
     if (typeof acta?.seq !== 'number') return false
     const r = await adoptRecord({ link, candidate: acta, me: myPub })
@@ -344,12 +387,14 @@ export async function startRemoteAgent (opts = {}) {
    * puede colar nada, como mucho no tener la más nueva.
    */
   const actaCacheProblems = new Set()
+  /** @param {string} what @param {any} e */
   function noteActaCache (what, e) {
     const code = e?.code || 'error'
     if (actaCacheProblems.has(what + code)) return
     actaCacheProblems.add(what + code)
     if (!opts.quiet) console.error(`[remote-agent] record cache on the proxy (${what}): ${code} · ${e?.message || ''}`)
   }
+  /** @param {DotrinoActa} acta */
   function shareActa (acta) {
     // Por detrás y sin tumbar a quien adopta: si falla, se dice una vez y sigue.
     Promise.resolve().then(() => client.putActa(acta)).catch((e) => noteActaCache('put', e))
@@ -358,6 +403,7 @@ export async function startRemoteAgent (opts = {}) {
   async function actaFromProxy () {
     const profileId = trustedActa()?.profileId
     if (!profileId) return false
+    /** @type {object[]} */
     let list
     try { list = await client.getActas(profileId, { sinceSeq: link.actaSeq ?? -1 }) } catch (e) { noteActaCache('get', e); return false }
     for (const a of list) if (await recordActa(a)) return true
@@ -387,6 +433,7 @@ export async function startRemoteAgent (opts = {}) {
    * El acta con la que se juzga un papel. Sin ella no se atiende a nadie — y un acta que
    * nunca se comprobó (la que guardó una versión anterior) cuenta como no tenerla.
    */
+  /** @returns {DotrinoActa | null} */
   const trustedActa = () => (link.actaTrusted === true && link.acta ? link.acta : null)
   const actaContext = () => {
     const acta = trustedActa()
@@ -396,7 +443,7 @@ export async function startRemoteAgent (opts = {}) {
   const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
   /** Trae el acta ahora (con freno) y dice si AVANZÓ: solo entonces merece juzgar otra vez. */
   // Ponerse al día mira primero la caché del proxio y, si no trae nada que encadene, la bóveda.
-  const catchUp = makeCatchUp({ refresh: async () => { if (!await actaFromProxy()) await vaultTick() }, seq: () => link.actaSeq })
+  const catchUp = makeCatchUp({ refresh: async () => { if (!await actaFromProxy()) await vaultTick() }, seq: () => link.actaSeq ?? null })
   vaultTick()
   const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
 
@@ -415,6 +462,7 @@ export async function startRemoteAgent (opts = {}) {
     }
   }, Math.min(60 * 1000, ttlMs)); sweeper.unref?.()
 
+  /** @param {string} from @param {any} p  el saludo tal como llegó: se comprueba campo a campo */
   async function handleHandshake (from, p) {
     const { data, signature, cert } = p
     if (!data || !signature || !cert) return send(from, { type: ERROR, error: 'incomplete handshake' })
@@ -432,16 +480,17 @@ export async function startRemoteAgent (opts = {}) {
     // 2026-10-07). Ahora, ante un rechazo, se trae el acta EN EL MOMENTO y se juzga otra vez, una
     // sola — y solo si el acta avanzó. Con freno (`catchUp`): cualquiera puede mandar saludos, y
     // no por eso se le pregunta a la bóveda cada vez.
+    /** @returns {Promise<{ chk: { ok: boolean, device: string }, error?: undefined, code?: undefined, reason?: undefined } | { chk?: undefined, code: string, reason?: string, error: string }>} */
     const judge = async () => {
       const chk = await verifyChain({ data, signature, cert, expectedScope: SIGN_SCOPE, ...actaContext(), revoked: revokedSet })
       if (!chk.ok) return { code: 'unauthorized', reason: chk.reason, error: 'unauthorized: ' + chk.reason }
-      return { chk }
+      return { chk: { ...chk, device: /** @type {string} */ (chk.device) } }  // ok: verifyChain dice qué aparato firmó
     }
     let verdict = await judge()
-    const known = (v) => canGreet(trustedActa(), v.chk.device)
+    const known = (/** @type {Awaited<ReturnType<typeof judge>>} */ v) => !!v.chk && canGreet(trustedActa(), v.chk.device)
     if ((verdict.error || !known(verdict)) && await catchUp()) verdict = await judge()
     if (verdict.error) return send(from, { type: ERROR, code: verdict.code, reason: verdict.reason, error: verdict.error })
-    const chk = verdict.chk
+    const chk = /** @type {NonNullable<typeof verdict.chk>} */ (verdict.chk)  // sin error hay chk
     // CERT ∩ ACTA. `verifyChain` comprueba QUIÉN EMITIÓ el papel; que el APARATO siga siendo
     // isMember y pueda firmar lo dice el acta, y hay que preguntárselo aparte. Sin esto, un
     // papel bien firmado por una selladora abría sesión aunque el acta no nombrara a ese
@@ -477,7 +526,7 @@ export async function startRemoteAgent (opts = {}) {
     const ack = { op: ACK, sid, seph: eph.pub, ceph: data.eph, machine: myPub, publickey: myPub, ts: Date.now() }
     const { signature: ackSig } = await signWithDevice({ privateJwk: link.device.privateJwk, data: ack })
 
-    const session = new AgentSession({ sid, key, from, device: chk.device, send, isDirect: typeof client.isWebRTCOpen === 'function' ? (t) => client.isWebRTCOpen(t) : null })
+    const session = new AgentSession({ sid, key, from, device: chk.device, send, isDirect: typeof client.isWebRTCOpen === 'function' ? (/** @type {string} */ t) => client.isWebRTCOpen(t) : null })
     session._exp = Date.now() + ttlMs
     // El papel con que entró: si después se retira (`revoked`), la sesión se cierra.
     session._certNonce = cert.nonce || null
@@ -485,9 +534,10 @@ export async function startRemoteAgent (opts = {}) {
     audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
     send(from, { type: ACK, sid, ack, signature: ackSig, cert: link.cert })
     if (!opts.quiet) console.log(`[remote-agent] session ${sid.slice(0, 8)} authorized (device ${chk.device?.slice?.(0, 8) || '?'})`)
-    if (opts.onSession) { try { opts.onSession(session) } catch (e) { if (!opts.quiet) console.error('[remote-agent] onSession:', e.message) } }
+    if (opts.onSession) { try { opts.onSession(session) } catch (e) { if (!opts.quiet) console.error('[remote-agent] onSession:', /** @type {Error} */ (e).message) } }
   }
 
+  /** @param {string} from @param {any} p */
   function handleData (from, p) {
     const s = sessions.get(p.sid)
     // Con `code` y el `sid`: así el cliente sabe que es SU sesión la que se perdió (el agente
@@ -506,14 +556,14 @@ export async function startRemoteAgent (opts = {}) {
   // Antes solo vencía por `SESSION_TTL_MS`: un teléfono que volvía del fondo abría sesión nueva
   // y la vieja seguía enganchada a su consola (seis del mismo aparato en una, el 2026-10-09).
   const goneMs = opts.sessionGoneMs ?? SESSION_GONE_MS
-  client.on('peer_disconnected', (token) => {
+  client.on('peer_disconnected', (/** @type {string} */ token) => {
     for (const [sid, s] of sessions) {
       if (s.from !== token || s._gone) continue
       s._gone = setTimeout(() => {
         s.close(); sessions.delete(sid)
         audit('session-gone', { sid: sid.slice(0, 8) })
       }, goneMs)
-      s._gone.unref?.()
+      s._gone?.unref?.()
     }
   })
 
@@ -538,6 +588,7 @@ export async function startRemoteAgent (opts = {}) {
   // firma valida y el body es para nuestra pubkey → un proxy/peer malicioso NO puede
   // borrarnos con un mensaje falso (cierra el wipe-DoS). Borra el enlace (link.json) y
   // detiene el agente.
+  /** @param {any} p  el aviso de revocación: se comprueba su firma */
   async function handleRevoked (p) {
     const b = p?.body
     if (!b || b.op !== 'revoke' || b.sub !== myPub) return
@@ -557,6 +608,7 @@ export async function startRemoteAgent (opts = {}) {
    * quitar un aparato le cierra la consola en el acto, sin esperar al tic de cinco minutos.
    * Un bloqueo no cambia el acta: va en la lista, que sí se pide.
    */
+  /** @param {any} payload */
   async function onAdminEvent (payload) {
     const ev = payload.body?.ev
     if (ev === 'blocked' || ev === 'unblocked') return refreshRevocations()
@@ -564,7 +616,7 @@ export async function startRemoteAgent (opts = {}) {
     if (typeof payload.acta?.seq === 'number' && payload.acta.seq > (link.actaSeq ?? -1)) await catchUp()
   }
 
-  client.on('message', (from, payload) => {
+  client.on('message', (/** @type {string} */ from, /** @type {any} */ payload) => {
     if (!payload || typeof payload !== 'object') return
     if (payload.type === HS) handleHandshake(from, payload).catch((e) => send(from, { type: ERROR, error: e.message }))
     else if (payload.type === DATA) handleData(from, payload)
@@ -592,8 +644,10 @@ export async function startRemoteAgent (opts = {}) {
    * Sin repliegue: sin acta no se sabe, y se dice con su código.
    * @returns {Promise<{ ok: true, seq: number } | { ok: false, code: 'no-record'|'not-in-record'|'missing-cap' }>}
    */
+  /** @param {string} pub @param {string} cap */
   async function checkCap (pub, cap) {
     if (typeof pub !== 'string' || !pub || typeof cap !== 'string' || !cap) throw Object.assign(new Error('checkCap: pub and cap are required'), { code: 'bad-request' })
+    /** @returns {{ ok: true, seq: number } | { ok: false, code: 'no-record'|'not-in-record'|'missing-cap' }} */
     const look = () => {
       const acta = trustedActa()
       if (!acta) return { ok: false, code: 'no-record' }
@@ -611,7 +665,7 @@ export async function startRemoteAgent (opts = {}) {
   }
   if (opts.onReady) { try { opts.onReady({ machine: myPub, machineId: myId, master }) } catch (_) {} }
 
-  return { machine: myPub, machineId: myId, master, client, reportIncident, isBlocked: (pub) => blockedSet.has(pub), checkCap, record: trustedActa, close: stop }
+  return { machine: myPub, machineId: myId, master, client, reportIncident, isBlocked: (/** @type {string} */ pub) => blockedSet.has(pub), checkCap, record: trustedActa, close: stop }
 }
 
 export default { startRemoteAgent }

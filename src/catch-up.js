@@ -11,8 +11,13 @@
  */
 export const CATCH_UP_GAP_MS = 10_000
 
+/**
+ * @param {{ refresh: () => Promise<unknown>, seq: () => number | null, minGapMs?: number, now?: () => number }} o
+ * @returns {() => Promise<boolean>}
+ */
 export function makeCatchUp ({ refresh, seq, minGapMs = CATCH_UP_GAP_MS, now = Date.now }) {
   let last = -Infinity
+  /** @type {Promise<boolean> | null} */
   let running = null
   return async () => {
     // Uno a la vez: los saludos que lleguen mientras tanto esperan a ese mismo y usan su resultado.

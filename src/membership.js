@@ -14,7 +14,11 @@
  */
 import { memberCan, samePubkey } from '@dotrino/identity/acta'
 
-/** @returns {boolean} */
+/**
+ * @param {DotrinoActa | null | undefined} acta
+ * @param {unknown} pub
+ * @returns {boolean}
+ */
 export function canGreet (acta, pub) {
   if (!acta || typeof pub !== 'string' || !pub) return false
   return (acta.members || []).some((m) => samePubkey(m?.pub, pub)) && memberCan(acta, pub, 'sign')

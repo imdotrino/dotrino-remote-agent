@@ -24,7 +24,7 @@
 import { PING, PONG } from '../protocol.js'
 
 /**
- * @param {object} id   instancia de Identity (del vault) ya conectada.
+ * @param {AgentIdentity} id   instancia de Identity (del vault) ya conectada.
  * @param {string} [label]  filtrar por servicio/label exacto (p. ej. `'content'`,
  *   `'ia-agent'`). Omitir = todos los que tengan nameOf y no sean `'cli'` (un navegador
  *   enrolado queda como `cli` y no atiende a nadie).
@@ -41,12 +41,14 @@ export async function listAgentsByLabel (id, label, { fresh = true } = {}) {
   // vuelve a mirar cada pocos segundos: el panel de máquinas del agente lo hacía cada 30 s, y
   // cada vez era un `vault.devices` a la cuenta que despertaba a la bóveda de Lambda y no la
   // dejaba dormirse (2026-10-25). El agente ya refresca su acta solo (`REVOKE_REFRESH_MS`).
+  /** @type {DotrinoActa | null} */
   let acta = null
+  /** @type {Error | null} */
   let why = null
   if (!fresh) acta = (await id.profileActa?.().catch(() => null))?.acta || null
-  if (!acta) { try { acta = (await id.listVaultDevices())?.acta || null } catch (e) { why = e } }
+  if (!acta) { try { acta = (await id.listVaultDevices())?.acta || null } catch (e) { why = /** @type {Error} */ (e) } }
   // La bóveda no contestó: vale el acta que ya se tiene guardada.
-  if (!acta) acta = (await id.profileActa?.().catch((e) => { why = why || e; return null }))?.acta || null
+  if (!acta) acta = (await id.profileActa?.().catch((/** @type {Error} */ e) => { why = why || e; return null }))?.acta || null
   // SIN ACTA NO SE SABE quién es de la cuenta, y eso no es «no hay nadie». Devolver una lista
   // vacía aquí hacía que una máquina con la bóveda inalcanzable dijera «no tienes otras
   // máquinas» con toda tranquilidad. Se para y se dice.
@@ -55,12 +57,13 @@ export async function listAgentsByLabel (id, label, { fresh = true } = {}) {
   }
 
   const mine = id.me?.publickey
-  const nameOf = (m) => m.cn || m.label || null
+  /** @typedef {NonNullable<DotrinoActa['members']>[number]} Member */
+  const nameOf = (/** @type {Member} */ m) => m.cn || m.label || null
   // LAS BÓVEDAS NO SON AGENTES: su llave de comunicación (`cn: 'vault'`), la que sella
   // (`sealer`) y la réplica (`replica`). Preguntarles qué agente son no sirve de nada, y a una
   // bóveda que duerme (la de Lambda) el sondeo de Terminal cada 30 s la tenía despierta
   // (2026-10-25). Quien busca una bóveda por su nombre (`label`) la sigue encontrando.
-  const isVault = (m) => m.cn === 'vault' || (Array.isArray(m.caps) && (m.caps.includes('sealer') || m.caps.includes('replica')))
+  const isVault = (/** @type {Member} */ m) => m.cn === 'vault' || (Array.isArray(m.caps) && (m.caps.includes('sealer') || m.caps.includes('replica')))
   return (acta.members || [])
     .filter((m) => m?.pub && m.pub !== mine)
     .filter((m) => (label ? nameOf(m) === label : (nameOf(m) && nameOf(m) !== 'cli' && !isVault(m))))
@@ -78,7 +81,8 @@ export async function listAgentsByLabel (id, label, { fresh = true } = {}) {
  *
  * Un agente apagado no contesta y no sale: no se puede saber qué es sin preguntarle.
  *
- * @param {{ on:Function, sendByPubkey:Function }} client  un WebSocketProxyClient conectado.
+ * @param {{ on: (ev: 'message', fn: (from: string, p: any) => void) => () => void, sendByPubkey: (to: string, payload: object, opts?: { ephemeral?: boolean }) => unknown } | null} client
+ *   un WebSocketProxyClient conectado. `p` es lo que llega: se mira su `type` antes de usarlo.
  * @param {string[]} subs  pubkeys a preguntar (p. ej. las de `listAgentsByLabel(id)`).
  * @param {{ timeoutMs?: number }} [opts]
  * @returns {Promise<Map<string, { kind: string|null }>>} sub → lo que contestó.

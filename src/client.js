@@ -26,15 +26,31 @@ import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { canGreet } from './membership.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, DEFAULT_PROXY } from '../protocol.js'
 
+/**
+ * El enlace con que se habla a un agente: el de una pestaña (identidad del vault) o el de
+ * otro agente (`clientLink`).
+ * @typedef {object} ClientLink
+ * @property {AgentIdentity} id
+ * @property {unknown} cert
+ * @property {string} [iss]
+ * @property {string} [proxy]
+ * @property {string} [mode]                       'self': el dispositivo es su propio vault
+ * @property {DotrinoActa} [acta]                   un acta ya comprobada, si la trae
+ * @property {() => Promise<unknown>} [getSelfCert] modo self: refresca el self-cert
+ */
+
+/** Un ack del agente tal como llega (se comprueba en `_judgeAck`). */
+/** @typedef {{ type: string, ack: any, signature: string, cert: unknown, sid: string, from?: string }} AgentAck */
+
 export class RemoteAgentClient {
   /**
-   * @param {{ id:object, cert:object, iss:string, proxy?:string, mode?:string }} link
+   * @param {ClientLink} link
    *   enlace del vault (modo vault) o de @dotrino/vault (modo self: el dispositivo
    *   es su propio vault; `cert` es el self-cert `P ← P` e `iss` es la propia P).
-   * @param {object} opts
-   * @param {string} opts.agentPubkey dirección (pubkey) del agente destino.
+   * @param {object} [opts]  `agentPubkey` es obligatoria: `connect` la comprueba.
+   * @param {string} [opts.agentPubkey] dirección (pubkey) del agente destino.
    * @param {string} [opts.proxyUrl]  override del proxy del enlace.
-   * @param {() => object|null} [opts.trustedActa] un acta ya COMPROBADA y que alguien mantiene
+   * @param {(() => DotrinoActa | null) | null} [opts.trustedActa] un acta ya COMPROBADA y que alguien mantiene
    *   al día (un agente de Node: la de su enlace, que refresca cada 5 min y con los avisos de la
    *   bóveda). Con ella el saludo no espera a la bóveda; si no pasa, se le pregunta y se juzga
    *   otra vez. Sin ella, la bóveda en cada saludo, como siempre.
@@ -44,24 +60,43 @@ export class RemoteAgentClient {
     this.trustedActa = trustedActa
     this.agentPubkey = agentPubkey                    // pubkey del agente destino
     this.proxyUrl = proxyUrl || link.proxy || DEFAULT_PROXY
+    /** @type {import('@dotrino/proxy-client').WebSocketProxyClient | null} */
     this.client = null
+    /** @type {CryptoKey | null} */
     this.key = null
+    /** @type {string | null} */
     this.sid = null
+    /** @type {Record<string, Array<(...args: any[]) => void>>} */
     this._h = { message: [], error: [], resumed: [] }
+    /** @type {Promise<void> | null} */
     this._resuming = null
+    /** @type {Promise<void> | undefined} */
+    this._in = undefined
+    /** @type {Promise<void> | undefined} */
+    this._out = undefined
+    /** @type {unknown} */
+    this.actaCacheError = undefined
     // El token del agente: una vez que contesta el saludo se le habla POR TOKEN, que es lo
     // único que sube a WebRTC. `null` es «todavía no lo sé» y se va por su pubkey.
+    /** @type {string | null} */
     this.agentToken = null
+    /** @type {Set<string>} */
     this._directPeers = new Set()
   }
 
-  /** Suscribe a eventos. Devuelve un `off()` para desuscribir. Eventos: message, error, resumed. */
+  /**
+   * Suscribe a eventos. Devuelve un `off()` para desuscribir. Eventos: message, error, resumed.
+   * @param {'message' | 'error' | 'resumed'} ev
+   * @param {(...args: any[]) => void} cb
+   * @returns {() => void}
+   */
   on (ev, cb) {
     if (!this._h[ev]) this._h[ev] = []
     this._h[ev].push(cb)
     return () => { this._h[ev] = this._h[ev].filter((f) => f !== cb) }
   }
 
+  /** @param {string} ev @param {...unknown} args */
   _emit (ev, ...args) { for (const h of (this._h[ev] || [])) { try { h(...args) } catch (_) {} } }
 
   /**
@@ -75,9 +110,11 @@ export class RemoteAgentClient {
    * Si no hay ninguna, `null` y se corta con `no-record`: sin acta no hay con qué decidir, y
    * no decidir es que no.
    */
+  /** @returns {Promise<DotrinoActa | null>} */
   async _acta () {
     if (this.link.acta) return this.link.acta
     const id = this.link.id
+    /** @type {DotrinoActa | null} */
     let acta = null
     try { acta = (await id?.listVaultDevices?.())?.acta || null } catch (_) {}
     if (!acta) { try { acta = (await id?.profileActa?.())?.acta || null } catch (_) {} }
@@ -90,14 +127,15 @@ export class RemoteAgentClient {
     // mensajes dirigidos a P (que atiende el listener de enrolamiento). La
     // autorización la da el vault/self-cert que va firmado en el handshake.
     if (this.link.mode === 'self') return
-    if (!this.client.token) return
+    const client = this._client()
+    if (!client.token) return
     // Patrón estándar del ecosistema (messenger): identify firmado por id.signData
     // + cert del vault → el proxy enruta también lo dirigido a la maestra.
     const { id, cert } = this.link
     const publickey = id.me?.publickey
     if (!publickey) return
     // El sobre lo arma el pilar (`identifyAs`), que le pone el destinatario.
-    await this.client.identifyAs({ publickey, sign: (d) => id.signData(d), cert })
+    await client.identifyAs({ publickey, sign: (d) => id.signData(d), cert })
   }
 
   async connect () {
@@ -107,26 +145,28 @@ export class RemoteAgentClient {
     // porque entonces Node no tenía con qué; se quedó así cuando ya lo tuvo, y dos equipos
     // en la misma red se hablaban dando la vuelta por el proxio.
     // Solo negocia canal directo quien contestó NUESTRO saludo.
-    this.client = new WebSocketProxyClient({
+    const client = new WebSocketProxyClient({
       url: this.proxyUrl, autoReconnect: true,
       acceptDirectFrom: (token) => this._directPeers.has(token)
     })
-    await this.client.connect()
+    this.client = client
+    await client.connect()
     await this._identify()
     if (this.link.mode !== 'self') {
-      this.client.on('token', () => { this._identify().catch(() => {}) })
+      client.on('token', () => { this._identify().catch(() => {}) })
     }
 
     // El agente se reinició: su token ya no existe. El pilar ya mandó ese mensaje por su
     // pubkey; aquí solo se deja de usar el token hasta el próximo saludo.
-    this.client.on('token_gone', (token) => {
+    // @ts-expect-error proxy-client 0.46.0: su ProxyEvent no lista 'token_gone', que sí emite (src/client.js)
+    client.on('token_gone', (/** @type {string} */ token) => {
       this._directPeers.delete(token)
       if (token === this.agentToken) this.agentToken = null
     })
 
-    this.client.on('message', (_from, p) => {
+    client.on('message', (_from, p) => {
       if (!p || typeof p !== 'object') return
-      if (p.type === DATA && p.sid === this.sid) {
+      if (p.type === DATA && p.sid === this.sid && this.key) {
         // Se entregan en el orden en que llegaron: descifrar tarda según el tamaño, y sin
         // esta cola un mensaje pequeño adelantaba a uno grande que llegó antes.
         const opened = open(this.key, p.env).then((m) => ({ m }), () => null)
@@ -147,6 +187,7 @@ export class RemoteAgentClient {
    * sale por `error`. Un `unknown-session` de un `sid` que ya no es el nuestro (llegó tarde,
    * de antes de volver a saludar) no dice nada nuevo y se ignora.
    */
+  /** @param {{ code?: string, error?: string, reason?: string, sid?: string }} p */
   _onAgentError (p) {
     if (p.code !== 'unknown-session') { this._emit('error', Object.assign(new Error(p.error), { code: p.code, reason: p.reason })); return }
     if (p.sid !== this.sid) return
@@ -154,6 +195,7 @@ export class RemoteAgentClient {
   }
 
   /** Vuelve a saludar, una sola vez aunque lleguen varios errores seguidos. */
+  /** @returns {Promise<void>} */
   _resume () {
     if (this._resuming) return this._resuming
     this.key = null
@@ -180,8 +222,10 @@ export class RemoteAgentClient {
     // El ACK se correlaciona por la clave efímera PROPIA (ceph === eph.pub): así
     // varias sesiones simultáneas (varios RemoteAgentClient sobre la misma pubkey)
     // no se roban el ACK de la otra.
+    const client = this._client()
+    /** @type {Promise<AgentAck>} */
     const acked = new Promise((resolve, reject) => {
-      const off = this.client.on('message', (from, p) => {
+      const off = client.on('message', (from, p) => {
         if (!p || typeof p !== 'object') return
         // El token se apunta AQUÍ, en el mismo tic: si el agente es quien abre el canal
         // directo, su oferta llega justo detrás del ack y tiene que encontrarlo ya.
@@ -190,13 +234,17 @@ export class RemoteAgentClient {
       })
       setTimeout(() => { off(); reject(new Error('the agent did not reply (is it running there?)')) }, 20000)
     })
-    this.client.sendByPubkey(this.agentPubkey, { type: HS, data, signature, cert })
+    client.sendByPubkey(/** @type {string} */ (this.agentPubkey), { type: HS, data, signature, cert })
     const res = await acked
-    try { await this._checkAck(res, eph) } catch (e) { this._directPeers.delete(res.from); throw e }
+    try { await this._checkAck(res, eph) } catch (e) { if (res.from) this._directPeers.delete(res.from); throw e }
     this.agentToken = res.from || null
   }
 
-  /** Comprueba el ack y deja `sid` y `key`. */
+  /**
+   * Comprueba el ack y deja `sid` y `key`.
+   * @param {AgentAck} res
+   * @param {{ privateKey: CryptoKey, pub: string }} eph
+   */
   async _checkAck (res, eph) {
     // PRIMERO EL ACTA QUE YA SE TIENE (`trustedActa`), y la bóveda solo si con esa no pasa.
     // Preguntarle en cada saludo hacía esperar a la ventana 4-17 s antes de pedir la clave de
@@ -206,11 +254,11 @@ export class RemoteAgentClient {
     let local = null
     try { local = this.trustedActa?.() || null } catch (_) {}
     if (local) {
-      try { return await this._judgeAck(res, eph, local) } catch (e) { if (e.code !== 'unauthorized') throw e }
+      try { return await this._judgeAck(res, eph, local) } catch (e) { if (/** @type {{ code?: string }} */ (e).code !== 'unauthorized') throw e }
       // Va atrás: antes que la bóveda, la caché de actas del proxio (websocket-proxy ≥ 1.10.0).
       const newer = await this._actaFromProxy(local)
       if (newer) {
-        try { return await this._judgeAck(res, eph, newer) } catch (e) { if (e.code !== 'unauthorized') throw e }
+        try { return await this._judgeAck(res, eph, newer) } catch (e) { if (/** @type {{ code?: string }} */ (e).code !== 'unauthorized') throw e }
       }
     }
     return this._judgeAck(res, eph, await this._acta())
@@ -221,15 +269,22 @@ export class RemoteAgentClient {
    * El proxio no es de fiar: lo que no encadena se ignora. Si no se pudo preguntar, el motivo
    * queda en `actaCacheError` y se sigue con la bóveda, que es quien manda.
    */
+  /** @param {DotrinoActa} trusted @returns {Promise<DotrinoActa | null>} */
   async _actaFromProxy (trusted) {
     if (!trusted?.profileId) return null
+    /** @type {DotrinoActa[]} */
     let list
-    try { list = await this.client.getActas(trusted.profileId, { sinceSeq: trusted.seq }) } catch (e) { this.actaCacheError = e; return null }
+    try { list = /** @type {DotrinoActa[]} */ (await this._client().getActas(trusted.profileId, { sinceSeq: trusted.seq })) } catch (e) { this.actaCacheError = e; return null }
     for (const a of list) if ((await canAdopt({ candidate: a, current: trusted })).adopt) return a
     return null
   }
 
-  /** Juzga el ack con `acta` y, si pasa, deja `sid` y `key`. */
+  /**
+   * Juzga el ack con `acta` y, si pasa, deja `sid` y `key`.
+   * @param {AgentAck} res
+   * @param {{ privateKey: CryptoKey, pub: string }} eph
+   * @param {DotrinoActa | null} acta
+   */
   async _judgeAck (res, eph, acta) {
 
     // El ack debe: (1) encadenar a NUESTRA maestra, (2) estar firmado por el agente
@@ -265,10 +320,16 @@ export class RemoteAgentClient {
     this.key = await deriveKey(eph.privateKey, res.ack.seph, res.sid)
   }
 
-  /** Envía un payload de dominio cifrado al agente (si se está volviendo a saludar, después). */
+  /**
+   * Envía un payload de dominio cifrado al agente (si se está volviendo a saludar, después).
+   * @param {unknown} payload
+   * @returns {Promise<void>}
+   */
   async send (payload) {
     if (this._resuming) await this._resuming
     if (!this.key) throw Object.assign(new Error('no session with the agent'), { code: 'no-session' })
+    const client = this._client()
+    const agentPubkey = /** @type {string} */ (this.agentPubkey)  // `connect` la exigió
     // Salen en el orden en que se pidieron, tarde lo que tarde en cifrarse cada uno.
     const sid = this.sid
     const sealed = seal(this.key, payload)
@@ -276,29 +337,41 @@ export class RemoteAgentClient {
       const msg = { type: DATA, sid, env }
       // Por token en cuanto se sabe: sube al canal directo, y si el token murió el pilar lo
       // saca por la pubkey. Por pubkey solo mientras no hay token.
-      if (this.agentToken) this.client.sendToOrQueue(this.agentToken, msg, { peerPubkey: this.agentPubkey })
-      else this.client.sendByPubkey(this.agentPubkey, msg)
+      if (this.agentToken) client.sendToOrQueue(this.agentToken, msg, { peerPubkey: agentPubkey })
+      else client.sendByPubkey(agentPubkey, msg)
     })
     this._out = turn.catch(() => {})
     return turn
   }
 
-  /** Sonda de presencia (liveness) sin abrir sesión. Devuelve true si responde. */
+  /**
+   * Sonda de presencia (liveness) sin abrir sesión. Devuelve true si responde.
+   * @param {{ timeoutMs?: number }} [o]
+   * @returns {Promise<boolean>}
+   */
   async ping ({ timeoutMs = 4000 } = {}) {
+    const client = this._client()
     const n = crypto.getRandomValues(new Uint8Array(8)).join('')
+    /** @type {Promise<boolean>} */
     const got = new Promise((resolve) => {
-      const off = this.client.on('message', (_f, p) => {
+      const off = client.on('message', (_f, p) => {
         if (p?.type === PONG && p.n === n) { off(); resolve(true) }
       })
       setTimeout(() => { off(); resolve(false) }, timeoutMs)
     })
     // Efímero, como `probeAgents`: si no está, no se encola ni se le timbra.
-    this.client.sendByPubkey(this.agentPubkey, { type: PING, n }, { ephemeral: true })
+    client.sendByPubkey(/** @type {string} */ (this.agentPubkey), { type: PING, n }, { ephemeral: true })
     return got
   }
 
   async close () {
     try { this.client?.close() } catch {}
+  }
+
+  /** El transporte, que existe desde `connect`. Usarlo antes es un fallo de quien llama. */
+  _client () {
+    if (!this.client) throw Object.assign(new Error('not connected: call connect() first'), { code: 'not-connected' })
+    return this.client
   }
 }
 

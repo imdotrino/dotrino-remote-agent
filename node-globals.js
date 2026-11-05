@@ -13,7 +13,12 @@ import path from 'node:path'
 import WebSocket from 'ws'
 
 /** localStorage síncrono respaldado por un archivo JSON (solo lo que usan los paquetes). */
+/**
+ * @param {string} filePath
+ * @returns {Storage}
+ */
 export function fileLocalStorage (filePath) {
+  /** @type {Record<string, string>} */
   let data = {}
   try { if (fs.existsSync(filePath)) data = JSON.parse(fs.readFileSync(filePath, 'utf8')) || {} } catch (_) {}
   const flush = () => {
@@ -21,19 +26,20 @@ export function fileLocalStorage (filePath) {
     fs.writeFileSync(filePath, JSON.stringify(data), { mode: 0o600 })
   }
   return {
-    getItem: (k) => (k in data ? data[k] : null),
-    setItem: (k, v) => { data[k] = String(v); flush() },
-    removeItem: (k) => { delete data[k]; flush() },
+    getItem: (/** @type {string} */ k) => (k in data ? data[k] : null),
+    setItem: (/** @type {string} */ k, /** @type {unknown} */ v) => { data[k] = String(v); flush() },
+    removeItem: (/** @type {string} */ k) => { delete data[k]; flush() },
     clear: () => { data = {}; flush() },
-    key: (i) => Object.keys(data)[i] ?? null,
+    key: (/** @type {number} */ i) => Object.keys(data)[i] ?? null,
     get length () { return Object.keys(data).length }
   }
 }
 
 let _installed = false
+/** @param {string} dir  dónde vive `transport.json` (la llave de transporte del proxy-client) */
 export function installNodeGlobals (dir) {
   if (_installed) return
-  if (typeof globalThis.WebSocket === 'undefined') globalThis.WebSocket = WebSocket
+  if (typeof globalThis.WebSocket === 'undefined') globalThis.WebSocket = /** @type {typeof globalThis.WebSocket} */ (/** @type {unknown} */ (WebSocket))  // `ws` cumple la API que usa el proxy-client
 
   // Node ≥22 expone un `localStorage` NO funcional sin `--localstorage-file`, así
   // que aquí se pone el shim de archivo igual. Pero se pone con `defineProperty` y

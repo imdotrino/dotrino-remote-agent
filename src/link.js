@@ -26,13 +26,40 @@ import { DEFAULT_PROXY, RENEW_BEFORE_MS } from '../protocol.js'
 // @dotrino/vault >= 0.115.0 (la primera que exporta `atrest`).
 import { atRestFor, isEncrypted } from '@dotrino/vault/atrest'
 
+/**
+ * El papel de un aparato: lo firma la bóveda. `seq` es el del acta con que se emitió; `exp`
+ * solo lo lleva el modelo viejo (por fecha).
+ * @typedef {{ seq?: number, exp?: number } & Record<string, unknown>} AgentCert
+ */
+
+/**
+ * El enlace de esta máquina con su cuenta (`link.json`). Con bóveda: `device`, `enc`, `cert`,
+ * `iss`, `proxy`. Propio (`self: true`): `device`, `enc` y su génesis en `sealerChain`.
+ * @typedef {object} AgentLink
+ * @property {{ publickey: string, privateJwk: JsonWebKey }} device
+ * @property {{ publickey?: string, privateJwk?: JsonWebKey } & Record<string, unknown>} [enc]
+ * @property {AgentCert} [cert]
+ * @property {string} [iss]          la bóveda con que se enroló
+ * @property {string} [proxy]
+ * @property {string} [label]
+ * @property {string} [ns]
+ * @property {number} [at]
+ * @property {boolean} [self]
+ * @property {DotrinoActa[]} [sealerChain]
+ * @property {DotrinoActa} [acta]     el acta de confianza (solo si `actaTrusted`)
+ * @property {boolean} [actaTrusted]
+ * @property {number} [actaSeq]      la `seq` del acta más nueva que se ha visto
+ * @property {string[]} [blocked]   aparatos bloqueados por la bóveda (pubkeys)
+ */
+
+/** @param {string} [name] @returns {string} */
 export function dataDir (name = 'dotrino-remote-agent') {
   if (process.env.DOTRINO_REMOTE_AGENT_DIR) return process.env.DOTRINO_REMOTE_AGENT_DIR
   const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share')
   return path.join(base, name)
 }
 
-const linkPath = (dir) => path.join(dir, 'link.json')
+const linkPath = (/** @type {string} */ dir) => path.join(dir, 'link.json')
 
 /*
  * EL ENLACE VA CIFRADO EN REPOSO (0.30.0). Lleva la llave privada del aparato, y hasta aquí
@@ -53,11 +80,13 @@ const linkPath = (dir) => path.join(dir, 'link.json')
  */
 export function loadLink (dir = dataDir()) {
   let text
-  try { text = fs.readFileSync(linkPath(dir), 'utf8') } catch (e) {
+  try { text = fs.readFileSync(linkPath(dir), 'utf8') } catch (err) {
+    const e = /** @type {NodeJS.ErrnoException} */ (err)
     if (e?.code === 'ENOENT') return null
     throw Object.assign(new Error(`cannot read the link (${linkPath(dir)}): ${e.message}`), { code: 'link-unreadable' })
   }
   const box = atRestFor(dir)
+  /** @type {AgentLink} */
   let link
   try { link = JSON.parse(box.decrypt(text)) } catch (e) {
     throw Object.assign(new Error(`cannot open the link (${linkPath(dir)}): it was encrypted on another machine, or the file is damaged. Enroll this device again.`), { code: 'link-unreadable', cause: e })
@@ -66,6 +95,11 @@ export function loadLink (dir = dataDir()) {
   return link
 }
 
+/**
+ * @param {string} dir
+ * @param {ReturnType<typeof atRestFor>} box
+ * @param {AgentLink} link
+ */
 function writeEncrypted (dir, box, link) {
   const json = JSON.stringify(link, null, 2)
   const blob = box.encrypt(json)
@@ -77,6 +111,7 @@ function writeEncrypted (dir, box, link) {
 }
 
 /** Persiste el enlace, cifrado (0600). Exportada porque la RENOVACIÓN del cert lo reescribe. */
+/** @param {string} dir @param {AgentLink} link */
 export function saveLink (dir, link) {
   writeEncrypted(dir, atRestFor(dir), link)
 }
@@ -86,6 +121,7 @@ export function saveLink (dir, link) {
  * `dotrino-vault pair` (URL del QR, código compacto, JSON, base64url): es el mismo
  * `parseInvite` del ecosistema. `enroll` ya lo hace solo; esto es para quien quiera
  * mirar la invitación antes (qué bóveda, qué proxy) sin enrolar.
+ * @param {string} text
  */
 export async function parseQr (text) {
   const { parseInvite } = await import('@dotrino/vault/invite')
@@ -95,6 +131,7 @@ export async function parseQr (text) {
 }
 
 /** base64url → utf8 (lo usan los tests y algún QR viejo). */
+/** @param {string} s @returns {string} */
 export function b64urlDecode (s) {
   const b64 = String(s).replace(/-/g, '+').replace(/_/g, '/')
   return Buffer.from(b64, 'base64').toString('utf8')
@@ -118,12 +155,13 @@ export function b64urlDecode (s) {
  * @param {object|string} args.qr     La invitación, en cualquiera de sus formas.
  * @param {string} [args.label='remote-agent']  label del dispositivo (lo filtra el cliente).
  * @param {string} [args.dir=dataDir()]         dónde persistir el enlace.
- * @param {string} [args.ns]                    cajón de secretos que lee este agente (si lo hay).
+ * @param {string | null} [args.ns]             cajón de secretos que lee este agente (si lo hay).
  * @param {(c:{deviceId:string,code:string})=>void} [args.onChallenge]  mostrar el CÓDIGO para
  *        que un humano lo TIPEE en la bóveda al aprobar (el código NO viaja de aquí).
  * @param {number} [args.timeoutMs=180000]
+ * @returns {Promise<AgentLink>}
  */
-export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns = null, onChallenge, timeoutMs = 180000 } = {}) {
+export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns = null, onChallenge, timeoutMs = 180000 } = /** @type {{ qr: string }} */ ({ qr: '' })) {
   installNodeGlobals(dir)
   const { enrollWithVault } = await import('@dotrino/vault/service')
   const res = await enrollWithVault({
@@ -133,6 +171,7 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
     onCode: onChallenge,
     approveTimeoutMs: timeoutMs
   })
+  /** @type {AgentLink} */
   const link = { device: res.device, enc: res.enc, cert: res.cert, iss: res.iss, proxy: res.proxy, label, ...(ns ? { ns } : {}), at: Date.now() }
   saveLink(dir, link)
   return link
@@ -153,6 +192,7 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
  * misma, seguiría siendo la raíz de su génesis y podría entrar igual a otras bóvedas.
  *
  * @param {{ label?: string, dir?: string }} [args]
+ * @returns {Promise<AgentLink>}
  */
 export async function selfLink ({ label = 'remote-agent', dir = dataDir() } = {}) {
   installNodeGlobals(dir)
@@ -162,6 +202,7 @@ export async function selfLink ({ label = 'remote-agent', dir = dataDir() } = {}
     acta: genesisActa({ pub: d.publickey, encPub: e.encPublickey, label }),
     privateJwk: d.privateJwk
   })
+  /** @type {AgentLink} */
   const link = {
     device: { publickey: d.publickey, privateJwk: d.privateJwk },
     enc: { publickey: e.encPublickey, privateJwk: e.encPrivateJwk },
@@ -172,7 +213,7 @@ export async function selfLink ({ label = 'remote-agent', dir = dataDir() } = {}
 }
 
 /** ¿Es una identidad propia (sin bóveda)? */
-export const isSelfLink = (link) => link?.self === true
+export const isSelfLink = (/** @type {AgentLink | null | undefined} */ link) => link?.self === true
 
 /**
  * La IDENTIDAD de un agente a partir de su enlace: lo que un cliente del ecosistema
@@ -182,8 +223,9 @@ export const isSelfLink = (link) => link?.self === true
  * Node puede ser CLIENTE de otro agente (un bot que guarda en el node de contenido)
  * con el mismo código que usa una app.
  *
- * @param {object} link  el enlace (`loadLink(dir)`).
+ * @param {AgentLink} link  el enlace (`loadLink(dir)`).
  * @param {{ dir?: string }} [opts]  dir para los globals de Node (localStorage del proxy-client).
+ * @returns {AgentIdentity}
  */
 export function identityFromLink (link, { dir = dataDir() } = {}) {
   if (isSelfLink(link)) return selfIdentity(link, dir)
@@ -191,8 +233,10 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
   installNodeGlobals(dir)
   const device = link.device
   const proxy = link.proxy || DEFAULT_PROXY
+  const iss = link.iss  // comprobado arriba
   return {
     me: { publickey: device.publickey },
+    /** @param {object} data */
     async signData (data) {
       const signed = await signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
       // A NOMBRE DE QUIÉN VA, igual que en el navegador: el `profileId` y la cadena de
@@ -206,7 +250,7 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
       // `seq` es lo que describe un papel ahora; `exp` solo lo llevan los del modelo viejo
       // y se sigue dando mientras existan, para que quien mire sepa que le falta migrar.
       return {
-        paired: true, master: link.iss, proxy, deviceId: await pubkeyId(device.publickey),
+        paired: true, master: iss, proxy, deviceId: await pubkeyId(device.publickey),
         seq: link.cert?.seq ?? null,
         ...(typeof link.cert?.exp === 'number' ? { exp: link.cert.exp, legacy: true } : {})
       }
@@ -218,7 +262,7 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
       // actual de un salto («sin-acta-previa»), de modo que la cadena no iba a usarse jamás.
       // Costó tenerlo así: la respuesta llegó a 1,03 MB, el proxio corta el frame a 1 MB y
       // la bóveda se quedaba muda para todo el ecosistema (2026-08-24).
-      const res = await requestDevices({ master: link.iss, proxy, device, cert: link.cert })
+      const res = await requestDevices({ master: iss, proxy, device, cert: link.cert })
       // EL ACTA QUE SE DEVUELVE ES UNA COMPROBADA, nunca la que llegó por la red: la respuesta
       // no trae remitente comprobable, y con ella se decide quién es de la cuenta (a quién
       // se le abre una consola). Vale la que encadena desde la de confianza del enlace (o la
@@ -237,6 +281,7 @@ export function identityFromLink (link, { dir = dataDir() } = {}) {
  * La identidad de un enlace propio: firma con su llave y prueba con su génesis. Lo que
  * pregunta a una bóveda no existe aquí, y se dice (`no-vault`) en vez de inventarse.
  */
+/** @param {AgentLink} link @param {string} dir @returns {AgentIdentity} */
 function selfIdentity (link, dir) {
   const chain = link.sealerChain
   if (!link?.device?.privateJwk || !Array.isArray(chain) || chain.length !== 1) throw new Error('invalid self link: device and its genesis required')
@@ -245,6 +290,7 @@ function selfIdentity (link, dir) {
   const noVault = () => Promise.reject(Object.assign(new Error('this device has its own identity and is not paired with a vault'), { code: 'no-vault' }))
   return {
     me: { publickey: device.publickey },
+    /** @param {object} data */
     async signData (data) {
       const signed = await signWithDevice({ privateJwk: device.privateJwk, publickey: device.publickey, data })
       return { ...signed, profileId: chain[0].profileId, chain }
@@ -258,9 +304,15 @@ function selfIdentity (link, dir) {
   }
 }
 
-const trustedActaOf = (link) => (link?.actaTrusted === true && link.acta ? link.acta : null)
+const trustedActaOf = (/** @type {AgentLink} */ link) => (link?.actaTrusted === true && link.acta ? link.acta : null)
 
-/** El acta que `listVaultDevices` puede dar por buena. Exportada para las pruebas. */
+/**
+ * El acta que `listVaultDevices` puede dar por buena. Exportada para las pruebas.
+ * @param {AgentLink} link
+ * @param {DotrinoActa | null | undefined} candidate  la que llegó por la red
+ * @param {string} me
+ * @returns {Promise<DotrinoActa | null>}
+ */
 export async function checkedActa (link, candidate, me) {
   if (candidate && typeof candidate.seq === 'number') {
     const r = await adoptRecord({ link, candidate, me })
@@ -280,7 +332,7 @@ export { RENEW_BEFORE_MS }
  *   · `'behind'`: el acta que hemos visto va por delante del papel (el dueño cambió permisos).
  * Nunca por calendario: el papel no vence.
  *
- * @param {object} link
+ * @param {AgentLink} link
  * @returns {'legacy'|'behind'|null}
  */
 export function renewalReason (link) {
@@ -297,6 +349,7 @@ export function renewalReason (link) {
  * El acta que viaja con el papel se adopta SOLO si se puede comprobar (`record.js`): es la que
  * decide quién abre sesión con este agente. El papel sí se guarda siempre.
  */
+/** @param {{ dir: string, link: AgentLink, cert: AgentCert, acta: DotrinoActa }} o */
 export async function storeRenewedCert ({ dir, link, cert, acta }) {
   link.cert = cert
   link.actaSeq = acta.seq
@@ -316,9 +369,9 @@ export async function storeRenewedCert ({ dir, link, cert, acta }) {
  * El cert nuevo se VERIFICA antes de guardarlo (misma maestra, misma llave, más vida).
  * Un cert ya vencido no se renueva: ahí toca re-emparejar. No lanza: devuelve qué pasó.
  *
- * @param {object} link   el enlace (se muta con el cert nuevo).
+ * @param {AgentLink} link   el enlace (se muta con el cert nuevo).
  * @param {{ dir?: string, force?: boolean }} [opts]
- * @returns {Promise<{ renewed: boolean, exp: number|null, reason?: string }>}
+ * @returns {Promise<{ renewed: boolean, seq?: number | null, reason?: string }>}  `seq`: la del papel que queda
  */
 export async function renewLink (link, { dir = dataDir(), force = false } = {}) {
   if (!link?.cert) return { renewed: false, seq: null, reason: 'no cert' }
@@ -336,14 +389,14 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
     // firmada, esta bóveda puede sellarla, el papel lo firmó ella y es para esta llave) y
     // lanza si no cuadra. Aquí se comparaba `acta.profileId` con `link.iss`, que solo vale
     // en una cuenta que nació en esa bóveda: con una segunda bóveda no renovaba nunca.
-    const { cert, acta } = await requestRenew({ master: link.iss, proxy: link.proxy || DEFAULT_PROXY, device: link.device, cert: link.cert })
+    const { cert, acta } = await requestRenew({ master: /** @type {string} */ (link.iss), proxy: link.proxy || DEFAULT_PROXY, device: link.device, cert: link.cert })
     // SE GUARDA ANTES DE DAR NADA POR BUENO. Emitir un papel RETIRA el anterior, así que si
     // esto no se persiste la máquina se queda usando uno revocado y fuera para siempre. Le
     // pasó al registro de selladores en la migración, y por eso está dicho aquí.
     await storeRenewedCert({ dir, link, cert, acta })
     return { renewed: true, seq: cert.seq }
   } catch (e) {
-    return { renewed: false, seq: link.cert.seq ?? null, reason: e.message }
+    return { renewed: false, seq: link.cert.seq ?? null, reason: /** @type {Error} */ (e).message }
   }
 }
 
@@ -354,7 +407,9 @@ export async function renewLink (link, { dir = dataDir(), force = false } = {}) 
  * de otra cuenta no entra. Un agente que firma de cara a terceros la pide al arrancar y la
  * refresca de vez en cuando. No lanza: devuelve qué pasó.
  *
- * @returns {Promise<{ ok: boolean, seq?: number, reason?: string }>}
+ * @param {AgentLink} link
+ * @param {{ dir?: string }} [opts]
+ * @returns {Promise<{ ok: boolean, seq?: number, reason?: string, self?: boolean }>}
  */
 export async function refreshChain (link, { dir = dataDir() } = {}) {
   // Una identidad propia es su propia cadena: no hay a quién preguntar ni nada que caduque.
@@ -363,25 +418,31 @@ export async function refreshChain (link, { dir = dataDir() } = {}) {
   installNodeGlobals(dir)
   try {
     const res = await requestDevices({ master: link.iss, proxy: link.proxy || DEFAULT_PROXY, device: link.device, cert: link.cert })
-    const chain = res.sealerChain
+    const chain = /** @type {DotrinoActa[] | undefined} */ (res.sealerChain)
     if (!Array.isArray(chain) || !chain.length) return { ok: false, reason: 'the vault sent no sealer chain (vaultd < 0.154.0?)' }
     const expected = link.sealerChain?.[0]?.profileId ?? link.acta?.profileId ?? null
     const v = await verifySealerChain(chain, { expectedProfileId: expected })
     if (!v.ok) return { ok: false, reason: 'bad sealer chain: ' + v.reason }
     const head = chain[chain.length - 1]
-    if (typeof link.sealerChain?.[link.sealerChain.length - 1]?.seq === 'number' && head.seq < link.sealerChain[link.sealerChain.length - 1].seq) {
+    const stored = link.sealerChain?.[link.sealerChain.length - 1]
+    if (typeof stored?.seq === 'number' && head.seq < stored.seq) {
       return { ok: false, reason: 'older than the chain already stored' }
     }
     link.sealerChain = chain
     saveLink(dir, link)
     return { ok: true, seq: head.seq }
-  } catch (e) {
+  } catch (err) {
+    const e = /** @type {Error & { code?: string } | undefined} */ (err)
     // Un fallo de red llega a veces sin frase: se dice el código, o al menos que no se alcanzó.
     return { ok: false, reason: e?.message || e?.code || 'unreachable' }
   }
 }
 
-/** El enlace como lo esperan `ContentClient.connect({ link })` y `RemoteAgentClient`. */
+/**
+ * El enlace como lo esperan `ContentClient.connect({ link })` y `RemoteAgentClient`.
+ * @param {AgentLink} link
+ * @param {{ dir?: string }} [opts]
+ */
 export function clientLink (link, opts) {
   return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || DEFAULT_PROXY }
 }
