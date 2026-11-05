@@ -22,6 +22,8 @@
  */
 
 import { PING, PONG } from '../protocol.js'
+/** @typedef {import('./shapes.js').AgentIdentity} AgentIdentity */
+/** @typedef {import('./shapes.js').DotrinoActa} DotrinoActa */
 
 /**
  * @param {AgentIdentity} id   instancia de Identity (del vault) ya conectada.

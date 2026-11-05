@@ -25,6 +25,8 @@ import { sealersOf, samePubkey, canAdopt } from '@dotrino/identity/acta'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
 import { canGreet } from './membership.js'
 import { HS, ACK, DATA, PING, PONG, ERROR, DEFAULT_PROXY } from '../protocol.js'
+/** @typedef {import('./shapes.js').AgentIdentity} AgentIdentity */
+/** @typedef {import('./shapes.js').DotrinoActa} DotrinoActa */
 
 /**
  * El enlace con que se habla a un agente: el de una pestaña (identidad del vault) o el de

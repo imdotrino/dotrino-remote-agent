@@ -1,40 +1,20 @@
 // Tipos de los subpaths de pilares que usa este paquete y que se publican en JS sin .d.ts.
 // Solo lo que se usa aquí, con la forma que documenta cada pilar en su JSDoc. Si un pilar
-// empieza a publicar sus tipos, la entrada de aquí se borra.
-
-/**
- * Lo que un cliente del ecosistema usa de una identidad: el `Identity` del navegador o la que
- * arma `identityFromLink` con la llave de un aparato.
- */
-interface AgentIdentity {
-  me: { publickey: string, nickname?: string } | null
-  signData (data: object): Promise<{ signature: string, publickey?: string, profileId?: string | null, chain?: unknown[] | null } & Record<string, unknown>>
-  listVaultDevices (): Promise<{ acta?: DotrinoActa | null } & Record<string, unknown>>
-  profileActa? (): Promise<{ acta: DotrinoActa } | null>
-  getVaultCert? (): Promise<{ cert: unknown }>
-  vaultStatus? (): Promise<Record<string, unknown>>
-}
-
-/** Un acta (la lista de miembros de una cuenta). Llega de la red: se comprueba antes de usarla. */
-interface DotrinoActa {
-  seq: number
-  profileId: string
-  members?: Array<{ pub: string, caps?: string[], label?: string, cn?: string } & Record<string, unknown>>
-  [k: string]: unknown
-}
+// empieza a publicar sus tipos, la entrada de aquí se borra. Las formas propias de este
+// paquete (las que salen en sus tipos publicados) viven en `src/shapes.d.ts`.
 
 declare module '@dotrino/identity/acta' {
-  export function canAdopt (o: { candidate: DotrinoActa, current: DotrinoActa | null }): Promise<{ adopt: boolean, reason: string }>
+  export function canAdopt (o: { candidate: import('./src/shapes.js').DotrinoActa, current: import('./src/shapes.js').DotrinoActa | null }): Promise<{ adopt: boolean, reason: string }>
   export function verifyActa (o: { acta: unknown, expectedProfileId?: string | null }): Promise<{ ok: true } | { ok: false, reason: string }>
   export function samePubkey (a: unknown, b: unknown): boolean
-  export function sealersOf (acta: DotrinoActa | null | undefined, renounces?: string[]): string[]
-  export function memberCan (acta: DotrinoActa | null | undefined, pub: string, cap: string, extraRenounces?: string[]): boolean
+  export function sealersOf (acta: import('./src/shapes.js').DotrinoActa | null | undefined, renounces?: string[]): string[]
+  export function memberCan (acta: import('./src/shapes.js').DotrinoActa | null | undefined, pub: string, cap: string, extraRenounces?: string[]): boolean
   export function checkVaultReply (o: { acta: unknown, cert: unknown, vault: string, sub?: string, scope?: string | null, justSealed?: boolean }):
     Promise<{ ok: true } | { ok: false, reason: string }>
   export function verifySealerChain (chain: unknown[], o?: { expectedProfileId?: string | null }):
     Promise<{ ok: true, profileId: string, seq: number, sealers: string[] } | { ok: false, reason: string }>
-  export function genesisActa (o: { pub: string, encPub?: string | null, sealPub?: string | null, label?: string, chainUrl?: string | null, now?: number }): DotrinoActa
-  export function sealActa (o: { acta: DotrinoActa, privateKey?: CryptoKey, privateJwk?: JsonWebKey }): Promise<DotrinoActa>
+  export function genesisActa (o: { pub: string, encPub?: string | null, sealPub?: string | null, label?: string, chainUrl?: string | null, now?: number }): import('./src/shapes.js').DotrinoActa
+  export function sealActa (o: { acta: import('./src/shapes.js').DotrinoActa, privateKey?: CryptoKey, privateJwk?: JsonWebKey }): Promise<import('./src/shapes.js').DotrinoActa>
 }
 
 declare module '@dotrino/identity/capabilities' {
@@ -64,9 +44,9 @@ declare module '@dotrino/identity/vault/remote.js' {
   export function requestDevices (o: {
     master: string, to?: string | null, timeoutMs?: number, proxy: string, device: object, cert: unknown,
     sinceSeq?: number, onRevoked?: () => void
-  }): Promise<{ acta?: DotrinoActa } & Record<string, unknown>>
+  }): Promise<{ acta?: import('./src/shapes.js').DotrinoActa } & Record<string, unknown>>
   export function requestRenew (o: { master: string, proxy: string, device: object, cert: unknown, onRevoked?: () => void }):
-    Promise<{ cert: { seq?: number } & Record<string, unknown>, acta: DotrinoActa }>  // el pilar ya juzgó los dos (checkVaultReply)
+    Promise<{ cert: { seq?: number } & Record<string, unknown>, acta: import('./src/shapes.js').DotrinoActa }>  // el pilar ya juzgó los dos (checkVaultReply)
 }
 
 declare module '@dotrino/vault/atrest' {

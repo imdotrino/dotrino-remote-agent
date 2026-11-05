@@ -25,6 +25,8 @@ import { DEFAULT_PROXY, RENEW_BEFORE_MS } from '../protocol.js'
 // Estático y no perezoso: `loadLink`/`saveLink` son síncronos y así siguen. Necesita
 // @dotrino/vault >= 0.115.0 (la primera que exporta `atrest`).
 import { atRestFor, isEncrypted } from '@dotrino/vault/atrest'
+/** @typedef {import('./shapes.js').AgentIdentity} AgentIdentity */
+/** @typedef {import('./shapes.js').DotrinoActa} DotrinoActa */
 
 /**
  * El papel de un aparato: lo firma la bóveda. `seq` es el del acta con que se emitió; `exp`

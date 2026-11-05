@@ -1,29 +1,56 @@
 {
   "name": "@dotrino/remote-agent",
-  "version": "0.33.0",
+  "version": "0.33.1",
   "description": "Middleware compartido del ecosistema Dotrino para apps de agente remoto cifrado punto a punto (handshake E2E, emparejamiento SAS con vault, revocación, descubrimiento). Lo consumen dotrino-terminal (PTY) y dotrino-ia (chat con IA).",
   "type": "module",
   "main": "./index.js",
+  "types": "./types/index.d.ts",
   "exports": {
-    ".": "./index.js",
-    "./agent": "./src/agent.js",
-    "./client": "./src/client.js",
-    "./link": "./src/link.js",
-    "./browser-link": "./src/browser-link.js",
-    "./discover": "./src/discover.js",
-    "./node-globals": "./node-globals.js",
-    "./instances": "./src/instances.js"
+    ".": {
+      "types": "./types/index.d.ts",
+      "import": "./index.js"
+    },
+    "./agent": {
+      "types": "./types/src/agent.d.ts",
+      "import": "./src/agent.js"
+    },
+    "./client": {
+      "types": "./types/src/client.d.ts",
+      "import": "./src/client.js"
+    },
+    "./link": {
+      "types": "./types/src/link.d.ts",
+      "import": "./src/link.js"
+    },
+    "./browser-link": {
+      "types": "./types/src/browser-link.d.ts",
+      "import": "./src/browser-link.js"
+    },
+    "./discover": {
+      "types": "./types/src/discover.d.ts",
+      "import": "./src/discover.js"
+    },
+    "./node-globals": {
+      "types": "./types/node-globals.d.ts",
+      "import": "./node-globals.js"
+    },
+    "./instances": {
+      "types": "./types/src/instances.d.ts",
+      "import": "./src/instances.js"
+    }
   },
   "files": [
     "index.js",
     "e2e.js",
     "protocol.js",
     "node-globals.js",
-    "src"
+    "src",
+    "types"
   ],
   "scripts": {
     "test": "node --test 'test/**/*.test.js'",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "types": "node scripts/types.mjs"
   },
   "dependencies": {
     "@dotrino/compat": "0.5.0",

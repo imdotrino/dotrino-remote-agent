@@ -33,6 +33,7 @@ import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SES
 import { loadLink, saveLink, dataDir, renewalReason, storeRenewedCert } from './link.js'
 import { declare } from '@dotrino/compat'
 import { VAULT_PROTOCOL, VAULT_SPEAKS } from '@dotrino/vault/protocol'
+/** @typedef {import('./shapes.js').DotrinoActa} DotrinoActa */
 
 const PKG_VERSION = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 

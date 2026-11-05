@@ -16,6 +16,7 @@
  * Sin dependencias de Node: lo usa el agente y se prueba solo.
  */
 import { canAdopt, verifyActa, samePubkey } from '@dotrino/identity/acta'
+/** @typedef {import('./shapes.js').DotrinoActa} DotrinoActa */
 
 /**
  * @param {{ link: import('./link.js').AgentLink, candidate: DotrinoActa | null | undefined, me: string }} args  `me` = la llave pública de esta máquina.

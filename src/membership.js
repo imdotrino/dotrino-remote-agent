@@ -13,6 +13,7 @@
  * Sin acta no se sabe, y no saber es que no.
  */
 import { memberCan, samePubkey } from '@dotrino/identity/acta'
+/** @typedef {import('./shapes.js').DotrinoActa} DotrinoActa */
 
 /**
  * @param {DotrinoActa | null | undefined} acta
