@@ -63,6 +63,16 @@ declare module '@dotrino/vault/service' {
     qr: string | object, label?: string, expectedScope?: string | null,
     onCode?: (c: { deviceId: string, code: string }) => void, approveTimeoutMs?: number
   }): Promise<{ device: { publickey: string, privateJwk: JsonWebKey }, enc: { publickey?: string, privateJwk?: JsonWebKey } & Record<string, unknown>, cert: { seq?: number } & Record<string, unknown>, iss: string, proxy: string }>
+  export type UpdateInfo = { version: string, from?: string | null }
+  export interface UpdateHooks {
+    mayUpdate: (u: UpdateInfo) => Promise<boolean>
+    onUpdated: (u: UpdateInfo) => Promise<void>
+    onNeedsRoot: (u: UpdateInfo) => Promise<void>
+  }
+  export function vaultUpdateHooks (o: {
+    product: string, log?: (m: string) => void, dir?: string, proxyUrl?: string, masterPubkey?: string,
+    device?: unknown, cert?: unknown, _ask?: unknown, _done?: unknown, _root?: unknown
+  }): UpdateHooks
 }
 
 declare module '@dotrino/vault/protocol' {

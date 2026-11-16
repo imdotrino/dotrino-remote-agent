@@ -40,6 +40,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
 | `@dotrino/remote-agent/link` | Node | `enroll`, `enrollInteractive` (pregunta la invitación en la terminal, 0.35.0), `selfLink`, `isSelfLink`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
+| `@dotrino/remote-agent/update` | Node | `startSelfUpdate`, `vaultHooks`: el agente se actualiza solo (CONVENCIONES §15) y se reinicia cuando está libre (0.36.0; necesita `@dotrino/update`) |
 | `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
 
 ## Uso
