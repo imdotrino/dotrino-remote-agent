@@ -89,6 +89,24 @@ export function enroll({ qr, label, dir, ns, onChallenge, timeoutMs }?: {
     timeoutMs?: number | undefined;
 }): Promise<AgentLink>;
 /**
+ * ENLAZAR PREGUNTANDO EN LA TERMINAL: pide la invitación de `dotrino-vault pair`, la canjea y,
+ * mientras espera, enseña el código que hay que aprobar en la bóveda. Es lo que corre un agente
+ * la primera vez (`dotrino-terminal-agent`, `dotrino-remote-desktop-agent`): antes cada uno
+ * traía su copia. La copy de la terminal va en español, como la de los comandos que la usan.
+ *
+ * Lanza `no-tty` sin terminal delante (un servicio): enlazar necesita a alguien que pegue la
+ * invitación y apruebe el código.
+ *
+ * @param {{ dir: string, label: string, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream }} opts
+ * @returns {Promise<AgentLink>}
+ */
+export function enrollInteractive({ dir, label, input, output }: {
+    dir: string;
+    label: string;
+    input?: NodeJS.ReadableStream;
+    output?: NodeJS.WritableStream;
+}): Promise<AgentLink>;
+/**
  * UNA IDENTIDAD PROPIA, SIN BÓVEDA. El aparato cumple el rol cuando no hay pieza dedicada:
  * crea sus llaves (firma y cifrado) y un acta de génesis autofirmada donde él es el único
  * miembro. Es una cuenta de un solo aparato, igual que «este dispositivo es bóveda» en el
@@ -220,6 +238,7 @@ declare namespace _default {
     export { saveLink };
     export { parseQr };
     export { enroll };
+    export { enrollInteractive };
     export { selfLink };
     export { isSelfLink };
     export { identityFromLink };

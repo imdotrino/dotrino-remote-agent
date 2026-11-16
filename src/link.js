@@ -180,6 +180,49 @@ export async function enroll ({ qr, label = 'remote-agent', dir = dataDir(), ns 
 }
 
 /**
+ * ENLAZAR PREGUNTANDO EN LA TERMINAL: pide la invitación de `dotrino-vault pair`, la canjea y,
+ * mientras espera, enseña el código que hay que aprobar en la bóveda. Es lo que corre un agente
+ * la primera vez (`dotrino-terminal-agent`, `dotrino-remote-desktop-agent`): antes cada uno
+ * traía su copia. La copy de la terminal va en español, como la de los comandos que la usan.
+ *
+ * Lanza `no-tty` sin terminal delante (un servicio): enlazar necesita a alguien que pegue la
+ * invitación y apruebe el código.
+ *
+ * @param {{ dir: string, label: string, input?: NodeJS.ReadableStream, output?: NodeJS.WritableStream }} opts
+ * @returns {Promise<AgentLink>}
+ */
+export async function enrollInteractive ({ dir, label, input = process.stdin, output = process.stdout }) {
+  if (!(/** @type {any} */ (input)).isTTY && input === process.stdin) {
+    throw Object.assign(new Error('this machine is not linked, and linking needs an interactive terminal. Run it once in a terminal, then start it as a service.'), { code: 'no-tty' })
+  }
+  const say = (/** @type {string} */ t) => { output.write(t + '\n') }
+  const readline = await import('node:readline')
+  /** @param {string} q @returns {Promise<string>} */
+  const ask = (q) => {
+    const rl = readline.createInterface({ input, output })
+    return new Promise((resolve) => rl.question(q, (a) => { rl.close(); resolve(a) }))
+  }
+  say('Enlazar esta máquina con tu bóveda.')
+  say('En el PC de tu bóveda corre `dotrino-vault pair` y copia la invitación.\n')
+  const qr = await parseQr(await ask('Pega la invitación y pulsa Enter:\n> '))
+  say('\nConectando…')
+  const link = await enroll({
+    qr,
+    dir,
+    label,
+    onChallenge: ({ deviceId, code }) => {
+      say('\n  Escribe ESTE código en tu bóveda para aprobar esta máquina:')
+      say(`    código:  ${code}`)
+      say(`    máquina: ${deviceId}`)
+      say(`    (en el PC de la bóveda:  dotrino-vault approve ${code})\n`)
+      say('  Esperando la aprobación…')
+    }
+  })
+  say('\n  ✓ Máquina enlazada.\n')
+  return link
+}
+
+/**
  * UNA IDENTIDAD PROPIA, SIN BÓVEDA. El aparato cumple el rol cuando no hay pieza dedicada:
  * crea sus llaves (firma y cifrado) y un acta de génesis autofirmada donde él es el único
  * miembro. Es una cuenta de un solo aparato, igual que «este dispositivo es bóveda» en el
@@ -449,4 +492,4 @@ export function clientLink (link, opts) {
   return { id: identityFromLink(link, opts), cert: link.cert, iss: link.iss, proxy: link.proxy || DEFAULT_PROXY }
 }
 
-export default { dataDir, loadLink, saveLink, parseQr, enroll, selfLink, isSelfLink, identityFromLink, clientLink, renewLink, renewalReason, storeRenewedCert, refreshChain }
+export default { dataDir, loadLink, saveLink, parseQr, enroll, enrollInteractive, selfLink, isSelfLink, identityFromLink, clientLink, renewLink, renewalReason, storeRenewedCert, refreshChain }

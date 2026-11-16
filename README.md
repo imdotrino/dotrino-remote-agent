@@ -38,7 +38,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent` | isomórfico | `e2e` (`makeEphemeral`/`deriveKey`/`seal`/`open`) + constantes de protocolo |
 | `@dotrino/remote-agent/agent` | Node | `startRemoteAgent(opts)` |
 | `@dotrino/remote-agent/client` | navegador | `RemoteAgentClient` |
-| `@dotrino/remote-agent/link` | Node | `enroll`, `selfLink`, `isSelfLink`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
+| `@dotrino/remote-agent/link` | Node | `enroll`, `enrollInteractive` (pregunta la invitación en la terminal, 0.35.0), `selfLink`, `isSelfLink`, `loadLink`, `saveLink`, `dataDir`, `parseQr`, `identityFromLink`, `clientLink`, `renewLink` |
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
 | `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
 
