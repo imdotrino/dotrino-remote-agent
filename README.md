@@ -23,6 +23,11 @@ Provee lo común — y **solo** eso:
 - **Autodescubrimiento** de agentes por label (`listVaultDevices` + filtro).
 - **Auditoría** (`sessions.log` JSONL).
 
+- **Mensajes grandes**: la sesión saluda al pilar en las dos puntas (`helloTo`), y con
+  `@dotrino/proxy-client` ≥ 0.49.0 en las dos lo que no cabe en un mensaje del camino sale en
+  partes y llega entero y en orden. La app manda objetos enteros y no trocea nada. Con una punta
+  más vieja (las apps nativas, todavía) va entero, como antes (0.34.0).
+
 **No sabe nada de PTY ni de IA.** Cada app define sus payloads de dominio
 (terminal pasa `{type:'cmd',...}`, ia pasa `{type:'msg',...}`) y su renderer.
 

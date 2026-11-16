@@ -552,6 +552,11 @@ export async function startRemoteAgent (opts = {}) {
     sessions.set(sid, session)
     audit('session-open', { sid: sid.slice(0, 8), device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
     send(from, { type: ACK, sid, ack, signature: ackSig, cert: link.cert })
+    // EL SALUDO DEL PILAR: le dice a la otra punta qué entiende este cliente del transporte, y
+    // ella contesta con lo suyo. Con eso el pilar trocea lo grande que se manda por la sesión
+    // (proxy-client ≥ 0.49.0, `parts`) solo si la otra punta sabe rearmarlo. No bloquea: si no
+    // se puede saludar, todo va entero como antes.
+    try { client.helloTo(from) } catch (_) {}
     if (!opts.quiet) console.log(`[remote-agent] session ${sid.slice(0, 8)} authorized (device ${chk.device?.slice?.(0, 8) || '?'})`)
     if (opts.onSession) { try { opts.onSession(session) } catch (e) { if (!opts.quiet) console.error('[remote-agent] onSession:', /** @type {Error} */ (e).message) } }
   }

@@ -239,6 +239,9 @@ export class RemoteAgentClient {
     const res = await acked
     try { await this._checkAck(res, eph) } catch (e) { if (res.from) this._directPeers.delete(res.from); throw e }
     this.agentToken = res.from || null
+    // El saludo del pilar (ver agent.js): con él, lo grande de la sesión sale en partes hacia
+    // un agente que las rearma (proxy-client ≥ 0.49.0). Sin él, entero como antes.
+    if (this.agentToken) { try { client.helloTo(this.agentToken) } catch (_) {} }
   }
 
   /**
