@@ -42,6 +42,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
 | `@dotrino/remote-agent/update` | Node | `startSelfUpdate`, `vaultHooks`: el agente se actualiza solo (CONVENCIONES §15) y se reinicia cuando está libre (0.36.0; necesita `@dotrino/update`) |
 | `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
+| `@dotrino/remote-agent/service` | Node | `makeService`: el agente como servicio del usuario (systemd de usuario o inicio automático del escritorio en Linux, LaunchAgent en macOS, `HKCU\…\Run` + supervisor en Windows). Sin `sudo` (0.37.0) |
 
 ## Uso
 
@@ -149,6 +150,26 @@ process.on('exit', lockInstance(dir))   // dos procesos con el mismo enlace = la
 Sin nombre: si no hay ninguno enlazado es `default`; si hay uno, ese; si hay varios, se
 para y dice cuáles hay (la misma regla que `dotrino-env`). La raíz común se cambia con
 `DOTRINO_AGENT_HOME`.
+
+### Como servicio del usuario (`/service`, 0.37.0)
+
+```js
+import { makeService } from '@dotrino/remote-agent/service'
+const svc = makeService({
+  id: 'remote-desktop-agent',              // dotrino-<id>-<perfil>.service / .desktop, com.dotrino.<id>.<perfil>
+  title: 'Dotrino Remote Desktop agent',
+  runPrefix: 'DotrinoRemoteDesktopAgent',  // el valor de HKCU\…\Run
+  agentArgs: (name) => ['--name', name],   // cómo se corre el agente sin TTY
+  linux: 'autostart'                       // o 'systemd' (por defecto)
+})
+svc.installService({ name, cli, dir })     // también uninstallService, serviceStatus, startService
+// y en el CLI: `supervise --name <n>` → svc.superviseCommand({ name, dir, cli })
+```
+
+`linux: 'systemd'` arranca al encender (con *linger*), sin sesión gráfica: vale para un agente
+que solo necesita una shell (Terminal). `linux: 'autostart'` arranca con la sesión gráfica, que
+es lo que necesita un agente que mira el escritorio. Los dos casos con supervisor (Windows y
+`autostart`) le ponen `DOTRINO_SUPERVISED=1` al agente, así que `/update` puede reiniciarlo.
 
 ### Un agente como CLIENTE de otro agente (Node)
 
