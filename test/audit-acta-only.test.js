@@ -170,3 +170,14 @@ test('makeThrottle: como mucho una vez por hueco, y lo de en medio se junta en u
   t = 1000; timers[0].f(); await Promise.resolve(); await Promise.resolve()
   assert.equal(calls, 2)
 })
+
+test('agente: el permiso de verdad (`desktop`) con identity ≥ 0.139: sin él no entra, con él sí', async () => {
+  const a = await makeDeviceKey(); const b = await makeDeviceKey()
+  const s = await setup(['desktop'], async (v) => { await v.admit(a.publickey, 'a'); await v.admit(b.publickey, 'b', ['sign', 'desktop']) })
+  const ra = await s.greet(a, 'tok-a')
+  for (let i = 0; i < 40 && !ra.replies.length; i++) await wait(50)
+  assert.equal(ra.replies.at(-1)?.reason, 'missing-cap')
+  const rb = await s.greet(b, 'tok-b')
+  assert.equal(rb.replies.at(-1)?.type, ACK)
+  s.done()
+})
