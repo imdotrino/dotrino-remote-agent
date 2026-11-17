@@ -87,3 +87,15 @@ test('el freno es por agente: un candado nuevo no da intentos nuevos; sin poder 
   assert.equal(s2.at(-1).code, 'access-unreadable')
   fs.rmSync(d, { recursive: true, force: true })
 })
+
+test('lockCommand: estado y quitar sin terminal; poner sin terminal se para con no-tty', async () => {
+  const { lockCommand } = await import('../src/access.js')
+  const d = tmp(); const what = { es: 'usar el escritorio', en: 'use the desktop' }
+  assert.match(await lockCommand({ dir: d, args: ['--status'], what }), /^Sin clave/)
+  setAccessCode(d, '4821')
+  assert.match(await lockCommand({ dir: d, args: ['--status'], what }), /^Hay clave/)
+  assert.match(await lockCommand({ dir: d, args: ['--off'], what }), /quitada/)
+  assert.equal(hasAccessCode(d), false)
+  if (!process.stdin.isTTY) await assert.rejects(lockCommand({ dir: d, args: [], what }), { code: 'no-tty' })
+  fs.rmSync(d, { recursive: true, force: true })
+})

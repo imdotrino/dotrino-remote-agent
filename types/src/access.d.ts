@@ -70,6 +70,36 @@ export function makeLock({ gate, device, send }: {
     /** Si `msg` es el `unlock`, lo atiende y devuelve true. @param {any} msg */
     handle(msg: any): boolean;
 };
+/**
+ * Pregunta algo que no debe verse al teclearlo. Solo en una TTY: una clave no se pasa por una
+ * tubería (`no-tty`). Ctrl+C sale (130).
+ * @param {string} q
+ * @returns {Promise<string>}
+ */
+export function askHidden(q: string): Promise<string>;
+/**
+ * La orden `lock` de un agente: `lock` pone o cambia la clave (se teclea dos veces), `lock --off`
+ * la quita, `lock --status` dice si hay. Se pone EN la máquina: quien está delante ya puede leer y
+ * borrar el archivo, así que ni cambiarla ni quitarla piden la anterior. Vale al momento.
+ * Devuelve el texto para el usuario; lanza con `code` (`too-short`, `mismatch`, `no-tty`).
+ * @param {{ dir: string, args: string[], lang?: 'es' | 'en', what: { es: string, en: string }, localNote?: { es: string, en: string } | null }} o
+ *   `what`: lo que hace quien entra («abrir consolas», «usar el escritorio»).
+ *   `localNote`: si lo de esta misma máquina no la pide, la frase que lo dice.
+ * @returns {Promise<string>}
+ */
+export function lockCommand({ dir, args, lang, what, localNote }: {
+    dir: string;
+    args: string[];
+    lang?: "es" | "en";
+    what: {
+        es: string;
+        en: string;
+    };
+    localNote?: {
+        es: string;
+        en: string;
+    } | null;
+}): Promise<string>;
 export const ACCESS_FILE: "access.json";
 export const MIN_LENGTH: 4;
 /** Fallos seguidos que se dejan pasar sin esperar: al tercero empieza la espera. */

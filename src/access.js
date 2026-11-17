@@ -191,3 +191,69 @@ export function makeLock ({ gate, device = null, send }) {
     }
   }
 }
+
+/**
+ * Pregunta algo que no debe verse al teclearlo. Solo en una TTY: una clave no se pasa por una
+ * tubería (`no-tty`). Ctrl+C sale (130).
+ * @param {string} q
+ * @returns {Promise<string>}
+ */
+export function askHidden (q) {
+  if (!process.stdin.isTTY) return Promise.reject(fail('no-tty', 'the code is typed: a terminal is needed'))
+  process.stdout.write(q)
+  process.stdin.setRawMode(true)
+  process.stdin.resume()
+  return new Promise((resolve) => {
+    let typed = ''
+    const onData = (/** @type {Buffer} */ b) => {
+      // Una tecla que no es texto (flechas, Fin, el teclado numérico SIN Bloq Num) llega como una
+      // secuencia de escape: se descarta entera; si no, «[F» entraba en la clave sin verse.
+      const typedText = b.toString('utf8').replace(/\x1b(?:\[[0-9;?]*[ -/]*[@-~]|O.|.)?/g, '')
+      for (const ch of typedText) {
+        if (ch === '\r' || ch === '\n') {
+          process.stdin.off('data', onData); process.stdin.setRawMode(false); process.stdin.pause()
+          process.stdout.write('\n'); resolve(typed); return
+        }
+        if (ch === '\x03') { process.stdin.setRawMode(false); process.stdout.write('\n'); process.exit(130) }
+        if (ch === '\x7f' || ch === '\b') typed = typed.slice(0, -1)
+        else if (ch >= ' ') typed += ch
+      }
+    }
+    process.stdin.on('data', onData)
+  })
+}
+
+/**
+ * La orden `lock` de un agente: `lock` pone o cambia la clave (se teclea dos veces), `lock --off`
+ * la quita, `lock --status` dice si hay. Se pone EN la máquina: quien está delante ya puede leer y
+ * borrar el archivo, así que ni cambiarla ni quitarla piden la anterior. Vale al momento.
+ * Devuelve el texto para el usuario; lanza con `code` (`too-short`, `mismatch`, `no-tty`).
+ * @param {{ dir: string, args: string[], lang?: 'es' | 'en', what: { es: string, en: string }, localNote?: { es: string, en: string } | null }} o
+ *   `what`: lo que hace quien entra («abrir consolas», «usar el escritorio»).
+ *   `localNote`: si lo de esta misma máquina no la pide, la frase que lo dice.
+ * @returns {Promise<string>}
+ */
+export async function lockCommand ({ dir, args, lang = 'es', what, localNote = null }) {
+  const es = lang === 'es'
+  const w = es ? what.es : what.en
+  if (args.includes('--status')) {
+    return hasAccessCode(dir)
+      ? (es ? `Hay clave: tus otros aparatos la escriben para ${w} de esta máquina.` : `There is a code: your other devices type it to ${w} of this machine.`)
+      : (es ? `Sin clave: cualquier aparato de tu cuenta con permiso puede ${w} de esta máquina.` : `No code: any device of your account with the permission can ${w} of this machine.`)
+  }
+  if (args.includes('--off')) {
+    if (!hasAccessCode(dir)) return es ? 'Esta máquina no tenía clave.' : 'This machine had no code.'
+    clearAccessCode(dir)
+    return es ? 'Clave quitada.' : 'Code removed.'
+  }
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const changing = hasAccessCode(dir)
+  const first = await askHidden(es ? `Clave nueva (PIN o contraseña, mínimo ${MIN_LENGTH}): ` : `New code (PIN or password, at least ${MIN_LENGTH}): `)
+  if (first.length < MIN_LENGTH) throw fail('too-short', es ? `demasiado corta: mínimo ${MIN_LENGTH} caracteres` : `too short: at least ${MIN_LENGTH} characters`)
+  const again = await askHidden(es ? 'Otra vez: ' : 'Again: ')
+  if (again !== first) throw fail('mismatch', es ? 'no coinciden. No se cambió nada.' : 'they do not match. Nothing was changed.')
+  setAccessCode(dir, first)
+  if (changing) return es ? 'Clave cambiada. Los aparatos que ya estaban dentro siguen hasta que se desconecten.' : 'Code changed. Devices already in stay until they disconnect.'
+  const note = localNote ? ' ' + (es ? localNote.es : localNote.en) : ''
+  return (es ? `Clave puesta. Tus otros aparatos la escriben para ${w} de esta máquina.` : `Code set. Your other devices type it to ${w} of this machine.`) + note
+}
