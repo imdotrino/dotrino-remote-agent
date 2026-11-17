@@ -18,7 +18,9 @@
  * @param {string} [opts.product]     qué producto es (`accounts`, `terminal-agent`…), para el anuncio a la bóveda.
  * @param {string} [opts.version]     su versión. Sin `product`/`version` se anuncia como `remote-agent`.
  * @param {string[]} [opts.needs]     los permisos del acta que necesita, además de `sign`, que lo
- *   añade este pilar: sin él no se abre ninguna sesión (`@dotrino/compat` ≥ 0.5.0).
+ *   añade este pilar: sin él no se abre ninguna sesión (`@dotrino/compat` ≥ 0.5.0). Desde 0.38.0
+ *   también se EXIGEN a quien saluda: un aparato sin ellos no abre sesión (`missing-cap`), y si
+ *   se los quitan con la sesión abierta, se le cierra.
  *
  * Devuelve además el **`client`** (el `WebSocketProxyClient` ya conectado e
  * identificado bajo la pubkey de esta máquina). Se expone a propósito: un agente
@@ -140,10 +142,8 @@ export class AgentSession {
     on(ev: "message" | "close", cb: (msg?: any) => void): this;
     /** Lo que llega se entrega en el orden en que llegó, tarde lo que tarde en descifrarse cada uno. */
     /** @param {{ iv: string, ct: string }} env */
-    _ingest(env: {
-        iv: string;
-        ct: string;
-    }): Promise<void>;
+    /** @param {any} env @param {() => void} [onOpen]  solo si el sobre abre, antes de repartirlo */
+    _ingest(env: any, onOpen?: () => void): Promise<void>;
     close(): void;
 }
 declare namespace _default {

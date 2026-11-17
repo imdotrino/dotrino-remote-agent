@@ -25,10 +25,13 @@ import { verifyChain, signWithDevice, verifyDeviceSig, pubkeyId, keyLabel } from
 import { sealersOf, memberCan, checkVaultReply } from '@dotrino/identity/acta'
 import { sendToVault, acceptReply } from '@dotrino/identity/vault-seal'
 import { adoptRecord } from './record.js'
-import { canGreet } from './membership.js'
+import { canGreet, missingCaps } from './membership.js'
 import { installNodeGlobals } from '../node-globals.js'
 import { makeEphemeral, deriveKey, seal, open } from '../e2e.js'
-import { makeCatchUp } from './catch-up.js'
+import { makeCatchUp, makeThrottle } from './catch-up.js'
+
+/** Fallos de `verifyChain` que un acta más nueva no arregla: el saludo no prueba ni quién lo firmó. */
+const PRE_AUTH = new Set(['shape', 'no-device-pubkey', 'bad-action-signature', 'cert-device-mismatch'])
 import { HS, ACK, DATA, PING, PONG, ERROR, VMSG, SIGN_SCOPE, SESSION_TTL_MS, SESSION_GONE_MS, REVOKE_REFRESH_MS, DEFAULT_PROXY } from '../protocol.js'
 import { loadLink, saveLink, dataDir, renewalReason, storeRenewedCert } from './link.js'
 import { declare } from '@dotrino/compat'
@@ -125,10 +128,13 @@ export class AgentSession {
 
   /** Lo que llega se entrega en el orden en que llegó, tarde lo que tarde en descifrarse cada uno. */
   /** @param {{ iv: string, ct: string }} env */
-  _ingest (env) {
+  /** @param {any} env @param {() => void} [onOpen]  solo si el sobre abre, antes de repartirlo */
+  _ingest (env, onOpen) {
     const opened = open(this.key, env).then((msg) => ({ msg }), () => null)
     this._in = (this._in || Promise.resolve()).then(() => opened).then((r) => {
-      if (r) for (const h of this._h.message) { try { h(r.msg) } catch (_) {} }
+      if (!r) return
+      if (onOpen) onOpen()
+      for (const h of this._h.message) { try { h(r.msg) } catch (_) {} }
     })
     return this._in
   }
@@ -161,7 +167,9 @@ export class AgentSession {
  * @param {string} [opts.product]     qué producto es (`accounts`, `terminal-agent`…), para el anuncio a la bóveda.
  * @param {string} [opts.version]     su versión. Sin `product`/`version` se anuncia como `remote-agent`.
  * @param {string[]} [opts.needs]     los permisos del acta que necesita, además de `sign`, que lo
- *   añade este pilar: sin él no se abre ninguna sesión (`@dotrino/compat` ≥ 0.5.0).
+ *   añade este pilar: sin él no se abre ninguna sesión (`@dotrino/compat` ≥ 0.5.0). Desde 0.38.0
+ *   también se EXIGEN a quien saluda: un aparato sin ellos no abre sesión (`missing-cap`), y si
+ *   se los quitan con la sesión abierta, se le cierra.
  *
  * Devuelve además el **`client`** (el `WebSocketProxyClient` ya conectado e
  * identificado bajo la pubkey de esta máquina). Se expone a propósito: un agente
@@ -181,6 +189,8 @@ export async function startRemoteAgent (opts = {}) {
     product: opts.product || 'remote-agent', version: opts.version || PKG_VERSION,
     protocol: VAULT_PROTOCOL, speaks: VAULT_SPEAKS, needs: ['sign', ...(opts.needs || [])]
   })
+  /** Lo que se exige a quien saluda, además de `sign` (`terminal`, `desktop`…). */
+  const NEEDS = Object.freeze([...(opts.needs || [])])
   const master = /** @type {string} */ (link.iss)  // comprobado arriba
   const myPub = link.device.publickey
   const myId = await keyLabel(myPub)
@@ -439,7 +449,8 @@ export async function startRemoteAgent (opts = {}) {
     const acta = trustedActa()
     for (const [sid, s] of sessions) {
       const reason = !canGreet(acta, s.device) ? 'not-in-record'
-        : (s._certNonce && revokedSet.has(s._certNonce)) ? 'revoked' : null
+        : missingCaps(acta, s.device, NEEDS).length ? 'missing-cap'
+          : (s._certNonce && revokedSet.has(s._certNonce)) ? 'revoked' : null
       if (!reason) continue
       send(s.from, { type: ERROR, code: 'unauthorized', reason, sid, error: 'unauthorized: ' + reason })
       s.close(); sessions.delete(sid)
@@ -460,11 +471,16 @@ export async function startRemoteAgent (opts = {}) {
   }
 
   const vaultTick = async () => { await refreshRevocations(); await renewCertIfNeeded() }
+  // En cada tic se mira también la caché del proxio: si el agente se perdió el aviso de que
+  // quitaron un aparato y la bóveda está apagada, esa sesión no espera a que la bóveda vuelva.
+  const tick = async () => { try { await actaFromProxy() } catch (_) {} await vaultTick() }
   /** Trae el acta ahora (con freno) y dice si AVANZÓ: solo entonces merece juzgar otra vez. */
   // Ponerse al día mira primero la caché del proxio y, si no trae nada que encadene, la bóveda.
   const catchUp = makeCatchUp({ refresh: async () => { if (!await actaFromProxy()) await vaultTick() }, seq: () => link.actaSeq ?? null })
-  vaultTick()
-  const revTimer = setInterval(vaultTick, REVOKE_REFRESH_MS); revTimer.unref?.()
+  tick()
+  const revTimer = setInterval(tick, REVOKE_REFRESH_MS); revTimer.unref?.()
+  // Un aviso de bloqueo lo puede mandar cualquiera: trae la lista firmada, pero con freno.
+  const refreshBlocked = makeThrottle(() => refreshRevocations())
 
   const ttlMs = opts.sessionTtlMs ?? SESSION_TTL_MS
   // UNA SESIÓN QUE VENCE SE LE DICE AL CLIENTE en ese momento, con el mismo `unknown-session`
@@ -506,8 +522,11 @@ export async function startRemoteAgent (opts = {}) {
       return { chk: { ...chk, device: /** @type {string} */ (chk.device) } }  // ok: verifyChain dice qué aparato firmó
     }
     let verdict = await judge()
-    const known = (/** @type {Awaited<ReturnType<typeof judge>>} */ v) => !!v.chk && canGreet(trustedActa(), v.chk.device)
-    if ((verdict.error || !known(verdict)) && await catchUp()) verdict = await judge()
+    const known = (/** @type {Awaited<ReturnType<typeof judge>>} */ v) => !!v.chk && canGreet(trustedActa(), v.chk.device) && !missingCaps(trustedActa(), v.chk.device, NEEDS).length
+    // Solo se pregunta a la bóveda si un acta más nueva podría cambiar el veredicto: un saludo
+    // cuya firma no vale (o mal formado) no la despierta, por mucho que lleguen.
+    const couldChange = (/** @type {Awaited<ReturnType<typeof judge>>} */ v) => v.chk ? !known(v) : !PRE_AUTH.has(/** @type {string} */ (v.reason))
+    if (couldChange(verdict) && await catchUp()) verdict = await judge()
     if (verdict.error) return send(from, { type: ERROR, code: verdict.code, reason: verdict.reason, error: verdict.error })
     const chk = /** @type {NonNullable<typeof verdict.chk>} */ (verdict.chk)  // sin error hay chk
     // CERT ∩ ACTA. `verifyChain` comprueba QUIÉN EMITIÓ el papel; que el APARATO siga siendo
@@ -526,6 +545,13 @@ export async function startRemoteAgent (opts = {}) {
     // perfil». Se le pide lo que corresponde: que el acta lo nombre y le reconozca `sign`.
     if (!canGreet(trustedActa(), chk.device)) {
       return send(from, { type: ERROR, code: 'unauthorized', reason: 'not-in-record', error: 'unauthorized: not-in-record' })
+    }
+    // EL PERMISO DEL PRODUCTO (`terminal`, `desktop`…). Se dice cuál falta, para que la app
+    // pueda enseñar la orden que lo concede (`dotrino-vault caps <ID> +desktop`).
+    const lacking = missingCaps(trustedActa(), chk.device, NEEDS)
+    if (lacking.length) {
+      audit('session-refused', { reason: 'missing-cap', caps: lacking, device: (await pubkeyId(chk.device)).slice(0, 8).toUpperCase() })
+      return send(from, { type: ERROR, code: 'unauthorized', reason: 'missing-cap', caps: lacking, error: 'unauthorized: missing-cap ' + lacking.join(',') })
     }
     // BLOQUEADO por un aprobador: está en el acta y su papel vale, y aun así no entra. Se le
     // dice con su código, que no es lo mismo que un papel viejo ni que una revocación.
@@ -568,10 +594,14 @@ export async function startRemoteAgent (opts = {}) {
     // se reinició, o venció) y vuelve a saludar solo, en vez de quedarse con un error. Se
     // comprueba por el código, no por la frase.
     if (!s) return send(from, { type: ERROR, code: 'unknown-session', sid: p.sid, error: 'unknown or expired session' })
-    s._exp = Date.now() + ttlMs
-    s.from = from
-    if (s._gone) { clearTimeout(s._gone); s._gone = null }
-    s._ingest(p.env).catch(() => send(from, { type: ERROR, error: 'invalid envelope' }))
+    // Quién es, por dónde contestarle y que sigue vivo cambian SOLO con un sobre que abre la
+    // llave de la sesión: el `sid` viaja a la vista, y con él cualquiera desviaba la salida a su
+    // token, mantenía viva la sesión o se colaba en `acceptDirectFrom`.
+    s._ingest(p.env, () => {
+      s._exp = Date.now() + ttlMs
+      s.from = from
+      if (s._gone) { clearTimeout(s._gone); s._gone = null }
+    }).catch(() => send(from, { type: ERROR, error: 'invalid envelope' }))
   }
 
   // LA CONEXIÓN DEL CLIENTE SE FUE: su sesión no se queda 30 minutos. El proxio avisa de que ese
@@ -635,7 +665,7 @@ export async function startRemoteAgent (opts = {}) {
   /** @param {any} payload */
   async function onAdminEvent (payload) {
     const ev = payload.body?.ev
-    if (ev === 'blocked' || ev === 'unblocked') return refreshRevocations()
+    if (ev === 'blocked' || ev === 'unblocked') return refreshBlocked()
     if (payload.acta && await recordActa(payload.acta)) return
     if (typeof payload.acta?.seq === 'number' && payload.acta.seq > (link.actaSeq ?? -1)) await catchUp()
   }

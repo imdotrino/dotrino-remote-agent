@@ -42,6 +42,7 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent/discover` | navegador | `listAgentsByLabel`, `probeAgents` |
 | `@dotrino/remote-agent/update` | Node | `startSelfUpdate`, `vaultHooks`: el agente se actualiza solo (CONVENCIONES §15) y se reinicia cuando está libre (0.36.0; necesita `@dotrino/update`) |
 | `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
+| `@dotrino/remote-agent/access` | Node | La clave de la máquina (opcional): `setAccessCode`, `makeGate` (freno por agente, aviso por aparato), `makeLock` (el candado de cada sesión: `unlock` → `unlocked`). Venía de Terminal (0.38.0) |
 | `@dotrino/remote-agent/service` | Node | `makeService`: el agente como servicio del usuario (systemd de usuario o inicio automático del escritorio en Linux, LaunchAgent en macOS, `HKCU\…\Run` + supervisor en Windows). Sin `sudo` (0.37.0) |
 
 ## Uso
@@ -233,6 +234,8 @@ el enlace del dispositivo (cert `P ← maestra`, `iss`, `proxy`), que se pasa al
 extraerlo luego a este paquete.
 
 ## Seguridad
+
+**Permiso por producto (0.38.0).** `needs: ['desktop']` (o `terminal`) no solo se declara a la bóveda: se exige a quien saluda. Sin él, `ra.error` con `reason: 'missing-cap'` y `caps` con lo que falta; si se lo quitan con la sesión abierta, se le cierra. Un `ra.data` solo cambia por dónde se contesta (y renueva la sesión) si su sobre abre con la llave de la sesión; un saludo con la firma mal no despierta a la bóveda; los avisos de bloqueo van con freno (auditoría del 2026-11-16).
 
 - **Autorización = el ACTA, en las dos puntas** (0.24.0). El papel (`cert`) prueba quién
   lo emitió —una selladora del acta— pero no caduca, así que el de un aparato quitado sigue

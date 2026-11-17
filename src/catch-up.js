@@ -32,3 +32,24 @@ export function makeCatchUp ({ refresh, seq, minGapMs = CATCH_UP_GAP_MS, now = D
     return running
   }
 }
+
+/**
+ * UN AVISO QUE CUALQUIERA PUEDE MANDAR no dispara el trabajo cada vez: como mucho una vez cada
+ * `minGapMs`, y lo que llegue mientras tanto se junta en UNA llamada al final del hueco (así un
+ * aviso de verdad entre basura no se pierde: llega tarde, como mucho `minGapMs`).
+ * @param {() => Promise<unknown>} fn
+ * @param {{ minGapMs?: number, now?: () => number, setTimer?: (f: () => void, ms: number) => unknown }} [o]
+ * @returns {() => void}
+ */
+export function makeThrottle (fn, { minGapMs = CATCH_UP_GAP_MS, now = Date.now, setTimer = (f, ms) => { const t = setTimeout(f, ms); t.unref?.(); return t } } = {}) {
+  let last = -Infinity
+  let pending = false
+  const run = () => { last = now(); Promise.resolve().then(fn).catch(() => {}) }
+  return () => {
+    if (pending) return
+    const wait = last + minGapMs - now()
+    if (wait <= 0) return run()
+    pending = true
+    setTimer(() => { pending = false; run() }, wait)
+  }
+}
