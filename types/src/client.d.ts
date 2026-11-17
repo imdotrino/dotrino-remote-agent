@@ -81,6 +81,11 @@ export class RemoteAgentClient {
     _identify(): Promise<void>;
     connect(): Promise<this>;
     /**
+     * Lo que hace `connect` con el cliente ya creado: conectar, identificarse, escuchar y saludar.
+     * @param {import('@dotrino/proxy-client').WebSocketProxyClient} client
+     */
+    _open(client: import("@dotrino/proxy-client").WebSocketProxyClient): Promise<void>;
+    /**
      * Un error del agente. Si es que ya no conoce NUESTRA sesión (se reinició: las sesiones
      * viven en su memoria), se vuelve a saludar solo y se avisa con `resumed`; lo que la app
      * tenía abierto allí lo decide la app. Cualquier otro error, o no poder volver a saludar,

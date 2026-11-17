@@ -152,6 +152,26 @@ export class RemoteAgentClient {
       acceptDirectFrom: (token) => this._directPeers.has(token)
     })
     this.client = client
+    // SI EL SALUDO FALLA, SE CIERRA LO QUE SE ABRIÓ. Sin esto, cada intento fallido (la otra
+    // máquina dice `unauthorized`, o no contesta) dejaba vivo un WebSocket con reconexión
+    // automática que nadie podía cerrar: quien llama no recibe el cliente, solo el error.
+    // El agente de terminal reintenta cada pocos segundos, y el 2026-11-17 acumuló 380
+    // conexiones al proxio hasta agotar las de nginx: nadie más pudo conectarse.
+    try {
+      await this._open(client)
+    } catch (e) {
+      try { client.close() } catch (_) {}
+      if (this.client === client) this.client = null
+      throw e
+    }
+    return this
+  }
+
+  /**
+   * Lo que hace `connect` con el cliente ya creado: conectar, identificarse, escuchar y saludar.
+   * @param {import('@dotrino/proxy-client').WebSocketProxyClient} client
+   */
+  async _open (client) {
     await client.connect()
     await this._identify()
     if (this.link.mode !== 'self') {
@@ -178,7 +198,6 @@ export class RemoteAgentClient {
     })
 
     await this._handshake()
-    return this
   }
 
   /**
