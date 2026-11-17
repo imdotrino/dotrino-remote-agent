@@ -44,6 +44,8 @@ Provee lo común — y **solo** eso:
 | `@dotrino/remote-agent/instances` | Node | `resolveInstance`, `listInstances`, `lockInstance`, `instancesRoot` |
 | `@dotrino/remote-agent/access` | Node | La clave de la máquina (opcional): `setAccessCode`, `makeGate` (freno por agente, aviso por aparato), `makeLock` (el candado de cada sesión: `unlock` → `unlocked`). Venía de Terminal (0.38.0) |
 | `@dotrino/remote-agent/service` | Node | `makeService`: el agente como servicio del usuario (systemd de usuario o inicio automático del escritorio en Linux, LaunchAgent en macOS, `HKCU\…\Run` + supervisor en Windows). Sin `sudo` (0.37.0) |
+| `@dotrino/remote-agent/local` | Node | `listenLocal({ dir, name, serve })` / `connectLocal(dir, { name })`: las ventanas de esta máquina hablan con su agente por un socket local (`<name>.sock`, carpeta 0700, socket 0600; en Windows una tubería con nombre aleatorio y llave). Venía de Terminal (0.40.0) |
+| `@dotrino/remote-agent/far` | Node | `discoverAgents` (las máquinas de la cuenta con un agente de un tipo encendido), `connectAgent` (una sesión con una, con el acta de confianza del enlace) y `failureLog`. El agente de esta máquina hace de cliente de los otros para sus ventanas locales. Venía de Terminal (0.40.0) |
 
 ## Uso
 
