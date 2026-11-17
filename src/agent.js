@@ -280,7 +280,7 @@ export async function startRemoteAgent (opts = {}) {
         const timer = setTimeout(() => done(reject, new Error('timeout')), timeoutMs)
         timer.unref?.()
         if (opts.client) via.sendByPubkey(master, message)
-        else sendToVault(via, { dest: master, acta: link.acta || null, payload: message, warn }).catch((e) => done(reject, e))
+        else sendToVault(via, { dest: master, acta: /** @type {Parameters<typeof sendToVault>[1]['acta']} */ (/** @type {unknown} */ (link.acta || null)), payload: message, warn }).catch((e) => done(reject, e))
       })
     } finally { if (!opts.client) { try { via.close() } catch (_) {} } }
   }
