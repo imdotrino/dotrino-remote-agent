@@ -82,7 +82,7 @@ const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
  * @returns {{ ok: true } | { ok: false, reason: string | undefined }}
  */
 function quiet (run, cmd, args) {
-  try { run(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' }); return { ok: true } } catch (e) {
+  try { run(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', windowsHide: true }); return { ok: true } } catch (e) {
     return { ok: false, reason: String(/** @type {Thrown} */ (e).stderr || /** @type {Thrown} */ (e).message).trim().split('\n').pop() }
   }
 }
